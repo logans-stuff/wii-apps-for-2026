@@ -75,9 +75,17 @@ static int fetch_array(const char *path, const char *token, cJSON **root,
     struct http_reply r;
 
     (void)total;
-    if (token != NULL && token[0] == '\0')
-        token = NULL;
-    if (https_get(SONORAN_HOST, path, token, &r) != 0) {
+    char cookie[4200];
+    const char *send = NULL;
+
+    if (token != NULL && token[0] != '\0') {
+        if (strchr(token, '=') != NULL)
+            snprintf(cookie, sizeof(cookie), "%s", token);
+        else
+            snprintf(cookie, sizeof(cookie), "%s=%s", SESSION_COOKIE, token);
+        send = cookie;
+    }
+    if (https_get(SONORAN_HOST, path, send, &r) != 0) {
         snprintf(err, errlen, "%s", r.err[0] ? r.err : "request failed");
         http_free(&r);
         return API_FAILED;

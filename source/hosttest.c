@@ -1,5 +1,5 @@
 /* Linux test of the network, TLS and API code that the Wii app uses.
- * Usage: hosttest [path]   (token from SONORAN_TOKEN, optional) */
+ * Usage: hosttest [path]   (cookie "name=value" from SONORAN_COOKIE, optional) */
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -10,7 +10,7 @@
 int main(int argc, char **argv)
 {
     const char *path = argc > 1 ? argv[1] : "/api/chat?limit=3";
-    const char *token = getenv("SONORAN_TOKEN");
+    const char *token = getenv("SONORAN_COOKIE");
     const char *host = argc > 2 ? argv[2] : SONORAN_HOST;
     char err[200];
     struct http_reply r;

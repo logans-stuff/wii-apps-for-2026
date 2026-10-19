@@ -4,7 +4,11 @@
 
 #include <stddef.h>
 
-#define SONORAN_HOST "view.azmsh.net"
+#define SONORAN_HOST "s.azmsh.dev"
+
+/* s.azmsh.dev is behind Authelia. Authelia keeps the login in this
+ * cookie. token.txt holds its value, or a full "name=value" pair. */
+#define SESSION_COOKIE "authelia_session"
 
 struct chat_msg {
     char when[24];     /* "10-19 15:31" in Arizona time */

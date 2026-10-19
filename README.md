@@ -1,6 +1,6 @@
 # Sonoran for Wii
 
-A Wii homebrew app that shows view.azmsh.net chat and nodes.
+A Wii homebrew app that shows Sonoran (s.azmsh.dev) chat and nodes.
 It does TLS itself (wolfSSL), so the Wii's old SSL and old root
 certificates do not matter. It reads the Sonoran JSON API as it is.
 No change to Sonoran is necessary.
@@ -25,7 +25,7 @@ No change to Sonoran is necessary.
 Linux test of the same TLS and API code:
 
     docker run --rm -v "$PWD":/w -w /w gcc:14 make -f Makefile.host
-    ./build-host/hosttest "/api/chat?limit=3"    # SONORAN_TOKEN=... for a login
+    ./build-host/hosttest "/api/chat?limit=3"    # SONORAN_COOKIE=authelia_session=... for a login
 
 ## Install
 
@@ -36,9 +36,10 @@ Or send it with wiiload while the Homebrew Channel is open:
 
 ## Login token
 
-The login proxy (AuthCrunch in front of Keycloak) accepts its own JWT in an
-`Authorization: Bearer` header. The app reads that JWT from
-`sd:/apps/sonoran/token.txt`. See `dist/apps/sonoran/README.txt`.
+s.azmsh.dev is behind Authelia (401 to `auth.azmsh.dev/?rd=...`). The app
+sends the `authelia_session` cookie. It reads the value from
+`sd:/apps/sonoran/token.txt`, or gets it over the LAN in pairing mode
+(button 1, port 4300, `pair.sh`). See `dist/apps/sonoran/README.txt`.
 
 ## Known limits
 

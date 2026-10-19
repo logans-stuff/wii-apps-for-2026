@@ -1,5 +1,5 @@
 /* HTTPS GET over TLS 1.3 with wolfSSL.
- * view.azmsh.net is behind Cloudflare, which accepts TLS 1.3 only. */
+ * The Sonoran hosts are behind Cloudflare. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -146,7 +146,7 @@ static long dechunk(char *body, size_t len)
     return (long)out;
 }
 
-int https_get(const char *host, const char *path, const char *token,
+int https_get(const char *host, const char *path, const char *cookie,
               struct http_reply *reply)
 {
     WOLFSSL *ssl = NULL;
@@ -182,7 +182,7 @@ int https_get(const char *host, const char *path, const char *token,
     snprintf(last_tls, sizeof(last_tls), "%s %s", wolfSSL_get_version(ssl),
              wolfSSL_get_cipher(ssl));
 
-    req = malloc(4096 + (token ? strlen(token) : 0));
+    req = malloc(4096 + (cookie ? strlen(cookie) : 0));
     if (req == NULL)
         goto nomem;
     ret = sprintf(req,
@@ -195,8 +195,8 @@ int https_get(const char *host, const char *path, const char *token,
                   "%s%s%s"
                   "\r\n",
                   path, host,
-                  token ? "Authorization: Bearer " : "", token ? token : "",
-                  token ? "\r\n" : "");
+                  cookie ? "Cookie: " : "", cookie ? cookie : "",
+                  cookie ? "\r\n" : "");
     if (wolfSSL_write(ssl, req, ret) != ret) {
         tls_error(ssl, ret, reply->err, sizeof(reply->err));
         goto done;

@@ -15,8 +15,8 @@ struct http_reply {
 /* Load the root certificates. Call one time, after net_start. */
 int https_init(char *err, size_t errlen);
 
-/* GET https://host/path. token may be NULL. */
-int https_get(const char *host, const char *path, const char *token,
+/* GET https://host/path. cookie ("name=value") may be NULL. */
+int https_get(const char *host, const char *path, const char *cookie,
               struct http_reply *reply);
 
 void http_free(struct http_reply *reply);

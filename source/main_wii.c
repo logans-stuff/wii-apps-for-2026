@@ -1,4 +1,4 @@
-/* Sonoran for Wii: shows view.azmsh.net chat and nodes.
+/* Sonoran for Wii: shows s.azmsh.dev chat and nodes.
  * Wii Remote: Left/Right = screen, Up/Down = scroll, A = open,
  * B = back, + = refresh, Home = exit. */
 #include <stdio.h>
@@ -108,7 +108,7 @@ static void put_cut(const char *s, int w)
 static void header(enum screen scr)
 {
     printf(CLEAR AT(1, 1));
-    printf(WHITE "Sonoran" GREY " - view.azmsh.net   ");
+    printf(WHITE "Sonoran" GREY " - s.azmsh.dev   ");
     printf("%s[ Chat ]%s ", scr == SCR_CHAT ? YELLOW : GREY, GREY);
     printf("%s[ Nodes ]%s\n", scr == SCR_NODES ? YELLOW : GREY, GREY);
 }
@@ -267,16 +267,16 @@ static void pair(void)
     printf(CLEAR AT(3, 1) WHITE "Pairing\n\n" GREY);
     printf("  On the computer, run:\n\n");
     printf(YELLOW "    ./pair.sh %s\n\n" GREY, ip);
-    printf("  Then paste the token and push Enter.\n");
+    printf("  Then paste the authelia_session value and push Enter.\n");
     printf("  Waiting on port %d...\n", PAIR_PORT);
     VIDEO_WaitVSync();
 
     n = tcp_receive_once(PAIR_PORT, got, sizeof(got), err, sizeof(err));
     if (n > 0) {
         got[strcspn(got, "\r\n \t")] = '\0';
-        if (strncmp(got, "eyJ", 3) != 0) {
+        if (strlen(got) < 16) {
             snprintf(status_line, sizeof(status_line),
-                     "Pairing: that is not a token (it must start with eyJ).");
+                     "Pairing: that value is too short for a session cookie.");
             return;
         }
         snprintf(token, sizeof(token), "%s", got);

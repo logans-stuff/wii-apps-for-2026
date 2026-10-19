@@ -1,0 +1,7 @@
+# Linux test build: make -f Makefile.host
+include wolfssl.mk
+CFLAGS := -O2 -g -Wall $(WOLF_CFLAGS)
+SRC := source/hosttest.c source/https.c source/api.c source/net_posix.c $(CJSON_SRC) $(WOLF_SRC)
+build-host/hosttest: $(SRC) include/user_settings.h source/cacerts.h
+	mkdir -p build-host
+	$(CC) $(CFLAGS) -o $@ $(SRC)

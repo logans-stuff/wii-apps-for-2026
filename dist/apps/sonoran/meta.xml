@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<app version="1">
+  <name>Sonoran</name>
+  <coder>Logan</coder>
+  <version>0.1</version>
+  <release_date>20261019</release_date>
+  <short_description>view.azmsh.net chat and nodes</short_description>
+  <long_description>Shows chat messages and nodes from view.azmsh.net over TLS 1.3. Needs a login token in token.txt.</long_description>
+  <no_ios_reload/>
+</app>

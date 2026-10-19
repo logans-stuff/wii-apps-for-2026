@@ -1,0 +1,6 @@
+build/
+build-host/
+dist/apps/sonoran/boot.dol
+third_party/
+*.zip
+token.txt

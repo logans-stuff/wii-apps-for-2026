@@ -257,39 +257,67 @@ static int save_token(char *err, size_t errlen)
     return 0;
 }
 
-/* Pairing: get a token over the LAN from pair.sh on a computer. */
+/* Pairing: get a login over the LAN from pair.sh on a computer.
+ * pair.sh sends "LOGIN\n<user>\n<password>\n" and the app logs in to
+ * Authelia itself, or "COOKIE\n<authelia_session value>\n". */
 static void pair(void)
 {
     static char got[TOKEN_MAX];
-    char ip[20], err[200];
-    int n;
+    char ip[20], err[200], cookie[600];
+    char *line1, *line2, *line3;
+    int n, rc;
 
     net_my_ip(ip, sizeof(ip));
-    printf(CLEAR AT(3, 1) WHITE "Pairing\n\n" GREY);
-    printf("  On the computer, run:\n\n");
-    printf(YELLOW "    ./pair.sh %s\n\n" GREY, ip);
-    printf("  Then paste the authelia_session value and push Enter.\n");
+    printf(CLEAR AT(3, 1) WHITE "Log in from a computer\n\n" GREY);
+    printf("  On bigboy, run:\n\n");
+    printf(YELLOW "    ~/wii-sonoran/pair.sh %s\n\n" GREY, ip);
+    printf("  Type the username and the password there.\n");
     printf("  Waiting on port %d...\n", PAIR_PORT);
     VIDEO_WaitVSync();
 
     n = tcp_receive_once(PAIR_PORT, got, sizeof(got), err, sizeof(err));
-    if (n > 0) {
-        got[strcspn(got, "\r\n \t")] = '\0';
-        if (strlen(got) < 16) {
-            snprintf(status_line, sizeof(status_line),
-                     "Pairing: that value is too short for a session cookie.");
-            return;
-        }
-        snprintf(token, sizeof(token), "%s", got);
-        memset(got, 0, sizeof(got));
-        if (save_token(err, sizeof(err)) == 0)
-            snprintf(status_line, sizeof(status_line),
-                     "Pairing OK. Token saved to %s", token_path);
-        else
-            snprintf(status_line, sizeof(status_line), "Token in memory only: %s", err);
+    dbg("pair: received %d bytes", n);
+    if (n <= 0) {
+        snprintf(status_line, sizeof(status_line), "Pairing failed: %s", n < 0 ? err : "no data");
         return;
     }
-    snprintf(status_line, sizeof(status_line), "Pairing failed: %s", n < 0 ? err : "no data");
+    line1 = got;
+    line2 = strchr(line1, '\n');
+    if (line2 != NULL)
+        *line2++ = '\0';
+    line3 = line2 ? strchr(line2, '\n') : NULL;
+    if (line3 != NULL)
+        *line3++ = '\0';
+    if (line3 != NULL)
+        line3[strcspn(line3, "\r\n")] = '\0';
+    if (line2 != NULL)
+        line2[strcspn(line2, "\r")] = '\0';
+
+    if (strcmp(line1, "LOGIN") == 0 && line2 && line3 && line2[0]) {
+        printf("  Logging in to " AUTH_HOST " as %s...\n", line2);
+        VIDEO_WaitVSync();
+        dbg("pair: login start");
+        rc = api_login(line2, line3, cookie, sizeof(cookie), err, sizeof(err));
+        dbg("pair: login rc=%d %s", rc, rc == API_OK ? "" : err);
+        memset(got, 0, sizeof(got));
+        if (rc != API_OK) {
+            snprintf(status_line, sizeof(status_line), "Login: %s Push 2 to try again.", err);
+            return;
+        }
+        snprintf(token, sizeof(token), "%s", cookie);
+        memset(cookie, 0, sizeof(cookie));
+    } else if (strcmp(line1, "COOKIE") == 0 && line2 && strlen(line2) >= 16) {
+        snprintf(token, sizeof(token), "%s", line2);
+        memset(got, 0, sizeof(got));
+    } else {
+        memset(got, 0, sizeof(got));
+        snprintf(status_line, sizeof(status_line), "Pairing: the data was not valid.");
+        return;
+    }
+    if (save_token(err, sizeof(err)) == 0)
+        snprintf(status_line, sizeof(status_line), "Logged in. Session saved to %s", token_path);
+    else
+        snprintf(status_line, sizeof(status_line), "Logged in (memory only): %s", err);
 }
 
 /* On-screen keyboard for the Wii Remote. It shows every printable ASCII

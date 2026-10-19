@@ -218,6 +218,7 @@ static void refresh(enum screen scr)
     char err[200];
     int rc, total;
 
+    dbg("refresh %s", scr == SCR_CHAT ? "chat" : "nodes");
     snprintf(status_line, sizeof(status_line), "Loading...");
     footer();
     VIDEO_WaitVSync();
@@ -401,7 +402,7 @@ static int osk_input(const char *title, char *buf, size_t buflen, int masked)
 }
 
 /* Log in to Authelia with a username and a password from the keyboard. */
-static void login(void)
+static int login(void)
 {
     static char user[64];
     static char password[128];
@@ -418,22 +419,24 @@ static void login(void)
     if (!osk_input("Log in to s.azmsh.dev - Username", user, sizeof(user), 0)
         || user[0] == '\0') {
         snprintf(status_line, sizeof(status_line), "Login cancelled.");
-        return;
+        return 0;
     }
     password[0] = '\0';
     if (!osk_input("Log in to s.azmsh.dev - Password", password, sizeof(password), 1)) {
         memset(password, 0, sizeof(password));
         snprintf(status_line, sizeof(status_line), "Login cancelled.");
-        return;
+        return 0;
     }
 
     printf(CLEAR AT(3, 1) GREY "  Logging in to " AUTH_HOST "...\n");
     VIDEO_WaitVSync();
+    dbg("login: start");
     rc = api_login(user, password, cookie, sizeof(cookie), err, sizeof(err));
     memset(password, 0, sizeof(password));
+    dbg("login: rc=%d %s", rc, rc == API_OK ? "" : err);
     if (rc != API_OK) {
         snprintf(status_line, sizeof(status_line), "Login: %s Push 1 to try again.", err);
-        return;
+        return 0;
     }
     snprintf(token, sizeof(token), "%s", cookie);
     memset(cookie, 0, sizeof(cookie));
@@ -444,11 +447,13 @@ static void login(void)
         fprintf(f, "%s\n", user);
         fclose(f);
     }
+    dbg("login: saving session");
     if (save_token(err, sizeof(err)) == 0)
         snprintf(status_line, sizeof(status_line), "Logged in. Session saved to %s",
                  token_path);
     else
         snprintf(status_line, sizeof(status_line), "Logged in (memory only): %s", err);
+    return 1;
 }
 
 int main(int argc, char **argv)
@@ -470,7 +475,8 @@ int main(int argc, char **argv)
         printf("Not logged in yet. Push 1 to log in.\n");
 
     printf("Starting the network...\n");
-    if (net_start(err, sizeof(err)) != 0 || https_init(err, sizeof(err)) != 0) {
+    if (net_start(err, sizeof(err)) != 0 || (dbg("start: token %s",
+            token[0] ? "present" : "none"), https_init(err, sizeof(err))) != 0) {
         show_message(RED, err);
         printf("\n  Push Home to exit.");
         for (;;) {
@@ -521,9 +527,12 @@ int main(int argc, char **argv)
             detail = 0;
             redraw = 1;
         } else if (down & WPAD_BUTTON_1) {
-            login();
-            loaded[0] = loaded[1] = 0;
+            /* Load again only after a good login, so that an error stays
+             * on the status line. */
+            if (login())
+                loaded[0] = loaded[1] = 0;
             detail = 0;
+            redraw = 1;
         } else if (down & WPAD_BUTTON_2) {
             pair();
             loaded[0] = loaded[1] = 0;
@@ -550,6 +559,7 @@ int main(int argc, char **argv)
             redraw = 1;
         }
     }
+    dbg("exit: Home pushed");
     printf(CLEAR);
     return 0;
 }

@@ -194,9 +194,12 @@ int https_request(const char *method, const char *host, const char *path,
 
     memset(reply, 0, sizeof(*reply));
 
+    dbg("%s %s%s: connect", method, host, path);
     handle = tcp_open(host, 443, reply->err, sizeof(reply->err));
-    if (handle < 0)
+    if (handle < 0) {
+        dbg("tcp_open failed: %s", reply->err);
         return -1;
+    }
 
     ssl = wolfSSL_new(ctx);
     if (ssl == NULL) {
@@ -211,8 +214,10 @@ int https_request(const char *method, const char *host, const char *path,
     ret = wolfSSL_connect(ssl);
     if (ret != WOLFSSL_SUCCESS) {
         tls_error(ssl, ret, reply->err, sizeof(reply->err));
+        dbg("handshake failed: %s", reply->err);
         goto done;
     }
+    dbg("handshake ok");
     snprintf(last_tls, sizeof(last_tls), "%s %s", wolfSSL_get_version(ssl),
              wolfSSL_get_cipher(ssl));
 
@@ -271,6 +276,7 @@ int https_request(const char *method, const char *host, const char *path,
     }
     buf[used] = '\0';
     entropy_add(used);
+    dbg("read %u bytes", (unsigned)used);
 
     split = strstr(buf, "\r\n\r\n");
     if (split == NULL || strncmp(buf, "HTTP/1.", 7) != 0) {
@@ -296,6 +302,8 @@ int https_request(const char *method, const char *host, const char *path,
         }
         reply->len = (size_t)n;
     }
+    dbg("HTTP %d, body %u bytes, set-cookie %s", reply->status, (unsigned)reply->len,
+        reply->set_cookie[0] ? "yes" : "no");
     reply->body = buf;
     buf = NULL;
     result = 0;

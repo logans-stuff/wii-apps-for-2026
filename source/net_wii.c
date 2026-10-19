@@ -1,5 +1,6 @@
 /* TCP layer for the Wii (libogc network.h). */
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -183,4 +184,35 @@ int tcp_receive_once(int port, char *buf, int len, char *err, size_t errlen)
     buf[used] = '\0';
     entropy_add((unsigned long long)used);
     return used;
+}
+
+/* One short TCP connection per line. TCP to a Docker port on bigboy
+ * passes its firewall; UDP did not arrive. */
+void dbg(const char *fmt, ...)
+{
+    struct sockaddr_in to;
+    char line[256];
+    va_list ap;
+    s32 fd;
+    int n;
+
+    n = snprintf(line, sizeof(line), "[%llu] ", (unsigned long long)ticks_to_millisecs(gettime()));
+    va_start(ap, fmt);
+    n += vsnprintf(line + n, sizeof(line) - n, fmt, ap);
+    va_end(ap);
+    if (n > (int)sizeof(line) - 2)
+        n = sizeof(line) - 2;
+    line[n++] = '\n';
+
+    fd = net_socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+    if (fd < 0)
+        return;
+    memset(&to, 0, sizeof(to));
+    to.sin_family = AF_INET;
+    to.sin_len = sizeof(to);
+    to.sin_port = htons(4301);
+    to.sin_addr.s_addr = inet_addr(DEBUG_HOST);
+    if (net_connect(fd, (struct sockaddr *)&to, sizeof(to)) >= 0)
+        net_send(fd, line, n, 0);
+    net_close(fd);
 }

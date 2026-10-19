@@ -6,6 +6,7 @@
 #include "cJSON.h"
 #include "api.h"
 #include "https.h"
+#include "net.h"
 
 /* Arizona does not use daylight saving time. It is UTC-7 all year. */
 #define AZ_OFFSET_HOURS (-7)
@@ -102,6 +103,7 @@ static int fetch_array(const char *path, const char *token, cJSON **root,
         return API_FAILED;
     }
     *root = cJSON_ParseWithLength(r.body, r.len);
+    dbg("JSON parse %s, first bytes: %.60s", *root ? "ok" : "FAILED", r.body ? r.body : "");
     http_free(&r);
     if (!cJSON_IsArray(*root)) {
         snprintf(err, errlen, "reply is not a JSON list");
@@ -137,6 +139,7 @@ int api_chat(const char *token, struct chat_msg *out, int max, int *count,
     }
     cJSON_Delete(root);
     *count = n;
+    dbg("chat: %d messages", n);
     return API_OK;
 }
 
@@ -167,6 +170,7 @@ int api_nodes(const char *token, struct node_row *out, int max, int *count,
     }
     cJSON_Delete(root);
     *count = n;
+    dbg("nodes: %d rows", n);
     if (total)
         *total = n; /* X-Total-Count is not read in v0.1 */
     return API_OK;
@@ -207,6 +211,7 @@ int api_login(const char *user, const char *password, char *cookie, size_t cooki
         http_free(&r);
         return API_FAILED;
     }
+    dbg("login reply HTTP %d", r.status);
     if (r.status == 401) {
         snprintf(err, errlen, "Wrong username or password.");
         http_free(&r);
@@ -224,6 +229,7 @@ int api_login(const char *user, const char *password, char *cookie, size_t cooki
         http_free(&r);
         return API_FAILED;
     }
+    dbg("login ok, cookie %u chars", (unsigned)strlen(r.set_cookie));
     snprintf(cookie, cookielen, "%s", r.set_cookie);
     memset(r.set_cookie, 0, sizeof(r.set_cookie));
     http_free(&r);

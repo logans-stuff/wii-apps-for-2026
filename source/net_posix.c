@@ -1,5 +1,6 @@
 /* TCP layer for a Linux test build. */
 #include <netdb.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -75,4 +76,15 @@ int sonoran_seed(unsigned char *out, unsigned int sz)
     n = fread(out, 1, sz, f);
     fclose(f);
     return n == sz ? 0 : -1;
+}
+
+void dbg(const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    fprintf(stderr, "dbg: ");
+    vfprintf(stderr, fmt, ap);
+    fprintf(stderr, "\n");
+    va_end(ap);
 }

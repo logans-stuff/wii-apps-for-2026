@@ -20,6 +20,10 @@ int tcp_receive_once(int port, char *buf, int len, char *err, size_t errlen);
 /* The IP address of this console as text. Wii only. */
 void net_my_ip(char *out, size_t outlen);
 
+/* Debug log: one TCP line to DEBUG_HOST:4301. Never log secrets. */
+#define DEBUG_HOST "127.0.0.1"
+void dbg(const char *fmt, ...);
+
 /* Add a timing sample to the random seed pool. */
 void entropy_add(unsigned long long sample);
 

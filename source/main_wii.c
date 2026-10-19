@@ -325,14 +325,15 @@ static void pair(void)
  * D-Pad = move, A = type the key, B = delete, 2 = show or hide a
  * password, + = OK, Home = cancel. */
 static const char *const osk_rows[] = {
+    "!@#$%^&*()-_",
+    "=+[]{};:'\"\\|",
+    ",.<>/?`~    ",
+    "0123456789  ",
     "abcdefghijkl",
     "mnopqrstuvwx",
     "yzABCDEFGHIJ",
     "KLMNOPQRSTUV",
-    "WXYZ01234567",
-    "89!@#$%^&*()",
-    "-_=+[]{};:'\"",
-    "\\|,.<>/?`~  ",
+    "WXYZ        ",
 };
 #define OSK_COLS 12
 #define OSK_CHAR_ROWS ((int)(sizeof(osk_rows) / sizeof(osk_rows[0])))
@@ -363,7 +364,7 @@ static void osk_draw(const char *title, const char *buf, int masked, int shown,
         int on = (r == OSK_CHAR_ROWS && j == c);
         printf("%s %s %s  ", on ? SEL WHITE : UNSEL GREY, osk_specials[j], UNSEL);
     }
-    printf(GREY "\n\n  D-Pad move  A type  B delete  + OK  Home cancel");
+    printf(GREY "\n\n  D-Pad move  A type  B delete  1 types !  + OK  Home cancel");
     if (masked)
         printf("  2 show/hide");
     printf("\n");
@@ -396,6 +397,11 @@ static int osk_input(const char *title, char *buf, size_t buflen, int masked)
             return 1;
         if ((down & WPAD_BUTTON_2) && masked)
             shown = !shown;
+        if ((down & WPAD_BUTTON_1) && len + 1 < buflen) {
+            /* Button 1 types '!' directly. */
+            buf[len] = '!';
+            buf[len + 1] = '\0';
+        }
         if ((down & WPAD_BUTTON_B) && len > 0)
             buf[len - 1] = '\0';
         if (down & WPAD_BUTTON_UP)

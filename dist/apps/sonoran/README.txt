@@ -11,7 +11,8 @@ in sd:/apps/sonoran/token.txt and the username in user.txt.
 When Authelia ends the session, push 1 and log in again.
 Keep the SD card safe. The session cookie gives access to your account.
 
-Keyboard: D-Pad move, A type, B delete, - shift, 2 show password,
+Keyboard: all characters show at the same time. D-Pad move, A type,
+B delete, 2 show password,
 + OK, Home cancel.
 
 Other way (pairing): push 2, then run ./pair.sh <wii-ip> on a computer

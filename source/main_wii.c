@@ -292,20 +292,28 @@ static void pair(void)
     snprintf(status_line, sizeof(status_line), "Pairing failed: %s", n < 0 ? err : "no data");
 }
 
-/* On-screen keyboard for the Wii Remote.
- * D-Pad = move, A = type the key, B = delete, - = shift,
- * 2 = show or hide a password, + = OK, Home = cancel. */
-static const char *const osk_rows[2][4] = {
-    { "1234567890-=", "qwertyuiop[]", "asdfghjkl;'\\", "zxcvbnm,./` " },
-    { "!@#$%^&*()_+", "QWERTYUIOP{}", "ASDFGHJKL:\"|", "ZXCVBNM<>?~ " },
+/* On-screen keyboard for the Wii Remote. It shows every printable ASCII
+ * character at the same time, so no shift key is necessary.
+ * D-Pad = move, A = type the key, B = delete, 2 = show or hide a
+ * password, + = OK, Home = cancel. */
+static const char *const osk_rows[] = {
+    "abcdefghijkl",
+    "mnopqrstuvwx",
+    "yzABCDEFGHIJ",
+    "KLMNOPQRSTUV",
+    "WXYZ01234567",
+    "89!@#$%^&*()",
+    "-_=+[]{};:'\"",
+    "\\|,.<>/?`~  ",
 };
 #define OSK_COLS 12
-#define OSK_ROWS 5 /* row 4: SHIFT SPACE DEL OK */
+#define OSK_CHAR_ROWS ((int)(sizeof(osk_rows) / sizeof(osk_rows[0])))
+#define OSK_ROWS (OSK_CHAR_ROWS + 1) /* last row: SPACE DEL OK */
 
-static const char *const osk_specials[4] = { "SHIFT", "SPACE", "DEL", "OK" };
+static const char *const osk_specials[3] = { "SPACE", "DEL", "OK" };
 
 static void osk_draw(const char *title, const char *buf, int masked, int shown,
-                     int shift, int r, int c)
+                     int r, int c)
 {
     int i, j, len = (int)strlen(buf);
 
@@ -313,39 +321,38 @@ static void osk_draw(const char *title, const char *buf, int masked, int shown,
     for (i = 0; i < len; i++)
         putchar(masked && !shown ? '*' : buf[i]);
     printf(YELLOW "_" GREY "\n\n");
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < OSK_CHAR_ROWS; i++) {
         printf("    ");
         for (j = 0; j < OSK_COLS; j++) {
-            char ch = osk_rows[shift][i][j];
+            char ch = osk_rows[i][j];
             int on = (i == r && j == c);
             printf("%s %c %s", on ? SEL WHITE : UNSEL GREY, ch == ' ' ? '_' : ch, UNSEL);
         }
-        printf("\n\n");
+        printf("\n");
     }
-    printf("    ");
-    for (j = 0; j < 4; j++) {
-        int on = (r == 4 && j == c);
-        printf("%s %s %s  ", on ? SEL WHITE : UNSEL GREY,
-               j == 0 && shift ? "shift" : osk_specials[j], UNSEL);
+    printf("\n    ");
+    for (j = 0; j < 3; j++) {
+        int on = (r == OSK_CHAR_ROWS && j == c);
+        printf("%s %s %s  ", on ? SEL WHITE : UNSEL GREY, osk_specials[j], UNSEL);
     }
-    printf(GREY "\n\n  D-Pad move  A type  B delete  - shift  + OK  Home cancel");
+    printf(GREY "\n\n  D-Pad move  A type  B delete  + OK  Home cancel");
     if (masked)
-        printf("  2 show");
+        printf("  2 show/hide");
     printf("\n");
 }
 
 /* Return 1 when the user pushed OK, 0 on cancel. */
 static int osk_input(const char *title, char *buf, size_t buflen, int masked)
 {
-    int r = 1, c = 0, shift = 0, shown = 0, redraw = 1;
+    int r = 0, c = 0, shown = 0, redraw = 1;
 
     for (;;) {
         u32 down;
         size_t len = strlen(buf);
-        int press = 0;
+        int width;
 
         if (redraw) {
-            osk_draw(title, buf, masked, shown, shift, r, c);
+            osk_draw(title, buf, masked, shown, r, c);
             redraw = 0;
         }
         VIDEO_WaitVSync();
@@ -359,8 +366,6 @@ static int osk_input(const char *title, char *buf, size_t buflen, int masked)
             return 0;
         if (down & WPAD_BUTTON_PLUS)
             return 1;
-        if (down & WPAD_BUTTON_MINUS)
-            shift = !shift;
         if ((down & WPAD_BUTTON_2) && masked)
             shown = !shown;
         if ((down & WPAD_BUTTON_B) && len > 0)
@@ -373,29 +378,24 @@ static int osk_input(const char *title, char *buf, size_t buflen, int masked)
             c--;
         if (down & WPAD_BUTTON_RIGHT)
             c++;
-        {
-            int width = r == 4 ? 4 : OSK_COLS;
-            if (c < 0)
-                c = width - 1;
-            if (c >= width)
-                c = 0;
-        }
-        if (down & WPAD_BUTTON_A)
-            press = 1;
-        if (!press)
+        width = r == OSK_CHAR_ROWS ? 3 : OSK_COLS;
+        if (c < 0)
+            c = width - 1;
+        if (c >= width)
+            c = 0;
+        if (!(down & WPAD_BUTTON_A))
             continue;
-        if (r == 4) {
-            if (c == 0)
-                shift = !shift;
-            else if (c == 1 && len + 1 < buflen) {
+        if (r == OSK_CHAR_ROWS) {
+            if (c == 0 && len + 1 < buflen) {
                 buf[len] = ' ';
                 buf[len + 1] = '\0';
-            } else if (c == 2 && len > 0)
+            } else if (c == 1 && len > 0) {
                 buf[len - 1] = '\0';
-            else if (c == 3)
+            } else if (c == 2) {
                 return 1;
-        } else if (len + 1 < buflen) {
-            buf[len] = osk_rows[shift][r][c];
+            }
+        } else if (osk_rows[r][c] != ' ' && len + 1 < buflen) {
+            buf[len] = osk_rows[r][c];
             buf[len + 1] = '\0';
         }
     }

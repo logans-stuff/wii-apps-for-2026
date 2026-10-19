@@ -8,7 +8,10 @@ TOKEN
 2. Open the developer tools (F12) > Application (Chrome) or Storage (Firefox)
    > Cookies > https://view.azmsh.net.
 3. Copy the value of the cookie "access_token".
-4. Put the value on one line in sd:/apps/sonoran/token.txt.
+4. On the Wii, push 1 in the app (pairing). On the computer, run
+   ./pair.sh <wii-ip> and paste the value. The app saves it to
+   sd:/apps/sonoran/token.txt.
+   Or put the value on one line in sd:/apps/sonoran/token.txt yourself.
 The token is valid for 7 days. Then do these steps again.
 Keep the SD card safe. The token gives access to your account for 7 days.
 
@@ -18,6 +21,7 @@ Up/Down     select a line
 A           open the line
 B           go back
 +           load again
+1           pairing (get a token over the LAN)
 Home        exit
 
 The Wii clock must be correct, or the certificate check fails.

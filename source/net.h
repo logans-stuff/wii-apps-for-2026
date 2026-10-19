@@ -13,6 +13,13 @@ int tcp_send(int handle, const void *data, int len);
 int tcp_recv(int handle, void *buf, int len);
 void tcp_close(int handle);
 
+/* Wait for one TCP client on port, read until it closes. Wii only.
+ * Return the byte count, or a negative number. */
+int tcp_receive_once(int port, char *buf, int len, char *err, size_t errlen);
+
+/* The IP address of this console as text. Wii only. */
+void net_my_ip(char *out, size_t outlen);
+
 /* Add a timing sample to the random seed pool. */
 void entropy_add(unsigned long long sample);
 

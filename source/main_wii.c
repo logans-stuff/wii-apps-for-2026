@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include <fat.h>
 #include <gccore.h>
@@ -17,6 +18,7 @@
 #define MAX_CHAT 60
 #define MAX_NODES 150
 #define TOKEN_MAX 4096
+#define PAIR_PORT 4300
 
 /* ANSI codes of the libogc console */
 #define CLEAR "\x1b[2J"
@@ -116,7 +118,7 @@ static void footer(void)
     printf("\x1b[%d;1H" GREY, rows);
     put_cut(status_line, cols);
     printf("\x1b[%d;1H", rows + 1);
-    put_cut("<-/-> screen  Up/Down scroll  A open  B back  + refresh  Home exit", cols);
+    put_cut("<-/-> screen  Up/Dn scroll  A open  B back  + reload  1 pair  Home exit", cols);
 }
 
 static void draw_chat(int top, int sel)
@@ -225,15 +227,68 @@ static void refresh(enum screen scr)
         rc = api_nodes(token, nodes, MAX_NODES, &nodes_n, &total, err, sizeof(err));
     if (rc == API_LOGIN && token[0] == '\0')
         snprintf(status_line, sizeof(status_line), "TLS OK (%s). Login needed: "
-                 "put a token in sd:/apps/sonoran/token.txt", https_last_tls());
+                 "push 1 to pair", https_last_tls());
     else if (rc == API_OK)
         snprintf(status_line, sizeof(status_line), "OK  %s  token: %s",
                  https_last_tls(), token_path);
     else if (rc == API_LOGIN)
-        snprintf(status_line, sizeof(status_line), "%s Put a new token in %s",
-                 err, token_path[0] ? token_path : "sd:/apps/sonoran/token.txt");
+        snprintf(status_line, sizeof(status_line), "%s Push 1 to pair again.", err);
     else
         snprintf(status_line, sizeof(status_line), "Error: %s", err);
+}
+
+/* Write the token to the SD card. Return 0 on success. */
+static int save_token(char *err, size_t errlen)
+{
+    FILE *f;
+
+    mkdir("sd:/apps", 0777);
+    mkdir("sd:/apps/sonoran", 0777);
+    f = fopen("sd:/apps/sonoran/token.txt", "wb");
+    if (f == NULL) {
+        snprintf(err, errlen, "cannot write sd:/apps/sonoran/token.txt. "
+                 "Is an SD card in the Wii?");
+        return -1;
+    }
+    fprintf(f, "%s\n", token);
+    fclose(f);
+    snprintf(token_path, sizeof(token_path), "sd:/apps/sonoran/token.txt");
+    return 0;
+}
+
+/* Pairing: get a token over the LAN from pair.sh on a computer. */
+static void pair(void)
+{
+    static char got[TOKEN_MAX];
+    char ip[20], err[200];
+    int n;
+
+    net_my_ip(ip, sizeof(ip));
+    printf(CLEAR AT(3, 1) WHITE "Pairing\n\n" GREY);
+    printf("  On the computer, run:\n\n");
+    printf(YELLOW "    ./pair.sh %s\n\n" GREY, ip);
+    printf("  Then paste the token and push Enter.\n");
+    printf("  Waiting on port %d...\n", PAIR_PORT);
+    VIDEO_WaitVSync();
+
+    n = tcp_receive_once(PAIR_PORT, got, sizeof(got), err, sizeof(err));
+    if (n > 0) {
+        got[strcspn(got, "\r\n \t")] = '\0';
+        if (strncmp(got, "eyJ", 3) != 0) {
+            snprintf(status_line, sizeof(status_line),
+                     "Pairing: that is not a token (it must start with eyJ).");
+            return;
+        }
+        snprintf(token, sizeof(token), "%s", got);
+        memset(got, 0, sizeof(got));
+        if (save_token(err, sizeof(err)) == 0)
+            snprintf(status_line, sizeof(status_line),
+                     "Pairing OK. Token saved to %s", token_path);
+        else
+            snprintf(status_line, sizeof(status_line), "Token in memory only: %s", err);
+        return;
+    }
+    snprintf(status_line, sizeof(status_line), "Pairing failed: %s", n < 0 ? err : "no data");
 }
 
 int main(int argc, char **argv)
@@ -305,6 +360,10 @@ int main(int argc, char **argv)
             scr = scr == SCR_CHAT ? SCR_NODES : SCR_CHAT;
             detail = 0;
             redraw = 1;
+        } else if (down & WPAD_BUTTON_1) {
+            pair();
+            loaded[0] = loaded[1] = 0;
+            detail = 0;
         } else if (down & WPAD_BUTTON_PLUS) {
             loaded[scr] = 0;
             detail = 0;

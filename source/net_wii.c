@@ -135,3 +135,52 @@ void tcp_close(int handle)
 {
     net_close(handle);
 }
+
+void net_my_ip(char *out, size_t outlen)
+{
+    u32 ip = net_gethostip();
+
+    snprintf(out, outlen, "%u.%u.%u.%u", (unsigned)(ip >> 24) & 0xff,
+             (unsigned)(ip >> 16) & 0xff, (unsigned)(ip >> 8) & 0xff,
+             (unsigned)ip & 0xff);
+}
+
+int tcp_receive_once(int port, char *buf, int len, char *err, size_t errlen)
+{
+    struct sockaddr_in sa;
+    socklen_t salen = sizeof(sa);
+    s32 lfd, cfd, n, used = 0;
+
+    lfd = net_socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+    if (lfd < 0) {
+        snprintf(err, errlen, "socket failed (%d)", (int)lfd);
+        return -1;
+    }
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_len = sizeof(sa);
+    sa.sin_port = htons(port);
+    sa.sin_addr.s_addr = INADDR_ANY;
+    if (net_bind(lfd, (struct sockaddr *)&sa, sizeof(sa)) < 0
+        || net_listen(lfd, 1) < 0) {
+        net_close(lfd);
+        snprintf(err, errlen, "cannot listen on port %d", port);
+        return -1;
+    }
+    cfd = net_accept(lfd, (struct sockaddr *)&sa, &salen);
+    net_close(lfd);
+    if (cfd < 0) {
+        snprintf(err, errlen, "accept failed (%d)", (int)cfd);
+        return -1;
+    }
+    while (used < len - 1) {
+        n = net_recv(cfd, buf + used, len - 1 - used, 0);
+        if (n <= 0)
+            break;
+        used += n;
+    }
+    net_close(cfd);
+    buf[used] = '\0';
+    entropy_add((unsigned long long)used);
+    return used;
+}

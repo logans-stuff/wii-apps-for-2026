@@ -146,8 +146,42 @@ static long dechunk(char *body, size_t len)
     return (long)out;
 }
 
+/* Copy the value of the Set-Cookie header for the cookie name. */
+static void find_set_cookie(const char *head, const char *name, char *out, size_t outlen)
+{
+    const char *p = head;
+    size_t nlen = strlen(name);
+
+    out[0] = '\0';
+    while ((p = strstr(p, "\r\n")) != NULL) {
+        const char *v;
+        size_t vlen;
+        p += 2;
+        if (strncasecmp(p, "Set-Cookie:", 11) != 0)
+            continue;
+        v = p + 11;
+        while (*v == ' ')
+            v++;
+        if (strncmp(v, name, nlen) != 0 || v[nlen] != '=')
+            continue;
+        vlen = strcspn(v, ";\r\n");
+        if (vlen >= outlen)
+            vlen = outlen - 1;
+        memcpy(out, v, vlen);
+        out[vlen] = '\0';
+        return;
+    }
+}
+
 int https_get(const char *host, const char *path, const char *cookie,
               struct http_reply *reply)
+{
+    return https_request("GET", host, path, cookie, NULL, NULL, reply);
+}
+
+int https_request(const char *method, const char *host, const char *path,
+                  const char *cookie, const char *want_cookie, const char *json,
+                  struct http_reply *reply)
 {
     WOLFSSL *ssl = NULL;
     int handle = -1;
@@ -182,21 +216,25 @@ int https_get(const char *host, const char *path, const char *cookie,
     snprintf(last_tls, sizeof(last_tls), "%s %s", wolfSSL_get_version(ssl),
              wolfSSL_get_cipher(ssl));
 
-    req = malloc(4096 + (cookie ? strlen(cookie) : 0));
+    req = malloc(4096 + (cookie ? strlen(cookie) : 0) + (json ? strlen(json) : 0));
     if (req == NULL)
         goto nomem;
     ret = sprintf(req,
-                  "GET %s HTTP/1.1\r\n"
+                  "%s %s HTTP/1.1\r\n"
                   "Host: %s\r\n"
                   "User-Agent: SonoranWii/0.1\r\n"
                   "Accept: application/json\r\n"
                   "Accept-Encoding: identity\r\n"
                   "Connection: close\r\n"
-                  "%s%s%s"
-                  "\r\n",
-                  path, host,
+                  "%s%s%s",
+                  method, path, host,
                   cookie ? "Cookie: " : "", cookie ? cookie : "",
                   cookie ? "\r\n" : "");
+    if (json != NULL)
+        ret += sprintf(req + ret, "Content-Type: application/json\r\n"
+                       "Content-Length: %u\r\n\r\n%s", (unsigned)strlen(json), json);
+    else
+        ret += sprintf(req + ret, "\r\n");
     if (wolfSSL_write(ssl, req, ret) != ret) {
         tls_error(ssl, ret, reply->err, sizeof(reply->err));
         goto done;
@@ -242,6 +280,8 @@ int https_get(const char *host, const char *path, const char *cookie,
     split[2] = '\0'; /* head ends with one CRLF now */
     reply->status = atoi(buf + 9);
     header_value(buf, "Location", reply->location, sizeof(reply->location));
+    if (want_cookie != NULL)
+        find_set_cookie(buf, want_cookie, reply->set_cookie, sizeof(reply->set_cookie));
     value[0] = '\0';
     header_value(buf, "Transfer-Encoding", value, sizeof(value));
 
@@ -264,6 +304,8 @@ int https_get(const char *host, const char *path, const char *cookie,
 nomem:
     snprintf(reply->err, sizeof(reply->err), "out of memory");
 done:
+    if (req != NULL)
+        memset(req, 0, 4096 + (cookie ? strlen(cookie) : 0) + (json ? strlen(json) : 0));
     free(req);
     free(buf);
     if (ssl != NULL) {

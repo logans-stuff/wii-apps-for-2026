@@ -118,7 +118,7 @@ static void footer(void)
     printf("\x1b[%d;1H" GREY, rows);
     put_cut(status_line, cols);
     printf("\x1b[%d;1H", rows + 1);
-    put_cut("<-/-> screen  Up/Dn scroll  A open  B back  + reload  1 pair  Home exit", cols);
+    put_cut("<-/-> screen  Up/Dn scroll  A open  B back  + reload  1 log in  2 pair  Home exit", cols);
 }
 
 static void draw_chat(int top, int sel)
@@ -227,12 +227,12 @@ static void refresh(enum screen scr)
         rc = api_nodes(token, nodes, MAX_NODES, &nodes_n, &total, err, sizeof(err));
     if (rc == API_LOGIN && token[0] == '\0')
         snprintf(status_line, sizeof(status_line), "TLS OK (%s). Login needed: "
-                 "push 1 to pair", https_last_tls());
+                 "push 1 to log in", https_last_tls());
     else if (rc == API_OK)
         snprintf(status_line, sizeof(status_line), "OK  %s  token: %s",
                  https_last_tls(), token_path);
     else if (rc == API_LOGIN)
-        snprintf(status_line, sizeof(status_line), "%s Push 1 to pair again.", err);
+        snprintf(status_line, sizeof(status_line), "%s Push 1 to log in again.", err);
     else
         snprintf(status_line, sizeof(status_line), "Error: %s", err);
 }
@@ -291,6 +291,166 @@ static void pair(void)
     snprintf(status_line, sizeof(status_line), "Pairing failed: %s", n < 0 ? err : "no data");
 }
 
+/* On-screen keyboard for the Wii Remote.
+ * D-Pad = move, A = type the key, B = delete, - = shift,
+ * 2 = show or hide a password, + = OK, Home = cancel. */
+static const char *const osk_rows[2][4] = {
+    { "1234567890-=", "qwertyuiop[]", "asdfghjkl;'\\", "zxcvbnm,./` " },
+    { "!@#$%^&*()_+", "QWERTYUIOP{}", "ASDFGHJKL:\"|", "ZXCVBNM<>?~ " },
+};
+#define OSK_COLS 12
+#define OSK_ROWS 5 /* row 4: SHIFT SPACE DEL OK */
+
+static const char *const osk_specials[4] = { "SHIFT", "SPACE", "DEL", "OK" };
+
+static void osk_draw(const char *title, const char *buf, int masked, int shown,
+                     int shift, int r, int c)
+{
+    int i, j, len = (int)strlen(buf);
+
+    printf(CLEAR AT(2, 1) WHITE "%s\n\n" GREY "  > " WHITE, title);
+    for (i = 0; i < len; i++)
+        putchar(masked && !shown ? '*' : buf[i]);
+    printf(YELLOW "_" GREY "\n\n");
+    for (i = 0; i < 4; i++) {
+        printf("    ");
+        for (j = 0; j < OSK_COLS; j++) {
+            char ch = osk_rows[shift][i][j];
+            int on = (i == r && j == c);
+            printf("%s %c %s", on ? SEL WHITE : UNSEL GREY, ch == ' ' ? '_' : ch, UNSEL);
+        }
+        printf("\n\n");
+    }
+    printf("    ");
+    for (j = 0; j < 4; j++) {
+        int on = (r == 4 && j == c);
+        printf("%s %s %s  ", on ? SEL WHITE : UNSEL GREY,
+               j == 0 && shift ? "shift" : osk_specials[j], UNSEL);
+    }
+    printf(GREY "\n\n  D-Pad move  A type  B delete  - shift  + OK  Home cancel");
+    if (masked)
+        printf("  2 show");
+    printf("\n");
+}
+
+/* Return 1 when the user pushed OK, 0 on cancel. */
+static int osk_input(const char *title, char *buf, size_t buflen, int masked)
+{
+    int r = 1, c = 0, shift = 0, shown = 0, redraw = 1;
+
+    for (;;) {
+        u32 down;
+        size_t len = strlen(buf);
+        int press = 0;
+
+        if (redraw) {
+            osk_draw(title, buf, masked, shown, shift, r, c);
+            redraw = 0;
+        }
+        VIDEO_WaitVSync();
+        WPAD_ScanPads();
+        down = WPAD_ButtonsDown(0);
+        if (down == 0)
+            continue;
+        entropy_add(down);
+        redraw = 1;
+        if (down & WPAD_BUTTON_HOME)
+            return 0;
+        if (down & WPAD_BUTTON_PLUS)
+            return 1;
+        if (down & WPAD_BUTTON_MINUS)
+            shift = !shift;
+        if ((down & WPAD_BUTTON_2) && masked)
+            shown = !shown;
+        if ((down & WPAD_BUTTON_B) && len > 0)
+            buf[len - 1] = '\0';
+        if (down & WPAD_BUTTON_UP)
+            r = (r + OSK_ROWS - 1) % OSK_ROWS;
+        if (down & WPAD_BUTTON_DOWN)
+            r = (r + 1) % OSK_ROWS;
+        if (down & WPAD_BUTTON_LEFT)
+            c--;
+        if (down & WPAD_BUTTON_RIGHT)
+            c++;
+        {
+            int width = r == 4 ? 4 : OSK_COLS;
+            if (c < 0)
+                c = width - 1;
+            if (c >= width)
+                c = 0;
+        }
+        if (down & WPAD_BUTTON_A)
+            press = 1;
+        if (!press)
+            continue;
+        if (r == 4) {
+            if (c == 0)
+                shift = !shift;
+            else if (c == 1 && len + 1 < buflen) {
+                buf[len] = ' ';
+                buf[len + 1] = '\0';
+            } else if (c == 2 && len > 0)
+                buf[len - 1] = '\0';
+            else if (c == 3)
+                return 1;
+        } else if (len + 1 < buflen) {
+            buf[len] = osk_rows[shift][r][c];
+            buf[len + 1] = '\0';
+        }
+    }
+}
+
+/* Log in to Authelia with a username and a password from the keyboard. */
+static void login(void)
+{
+    static char user[64];
+    static char password[128];
+    char cookie[600], err[200];
+    FILE *f;
+    int rc;
+
+    if (user[0] == '\0' && (f = fopen("sd:/apps/sonoran/user.txt", "rb")) != NULL) {
+        size_t n = fread(user, 1, sizeof(user) - 1, f);
+        fclose(f);
+        user[n] = '\0';
+        user[strcspn(user, "\r\n")] = '\0';
+    }
+    if (!osk_input("Log in to s.azmsh.dev - Username", user, sizeof(user), 0)
+        || user[0] == '\0') {
+        snprintf(status_line, sizeof(status_line), "Login cancelled.");
+        return;
+    }
+    password[0] = '\0';
+    if (!osk_input("Log in to s.azmsh.dev - Password", password, sizeof(password), 1)) {
+        memset(password, 0, sizeof(password));
+        snprintf(status_line, sizeof(status_line), "Login cancelled.");
+        return;
+    }
+
+    printf(CLEAR AT(3, 1) GREY "  Logging in to " AUTH_HOST "...\n");
+    VIDEO_WaitVSync();
+    rc = api_login(user, password, cookie, sizeof(cookie), err, sizeof(err));
+    memset(password, 0, sizeof(password));
+    if (rc != API_OK) {
+        snprintf(status_line, sizeof(status_line), "Login: %s Push 1 to try again.", err);
+        return;
+    }
+    snprintf(token, sizeof(token), "%s", cookie);
+    memset(cookie, 0, sizeof(cookie));
+
+    mkdir("sd:/apps", 0777);
+    mkdir("sd:/apps/sonoran", 0777);
+    if ((f = fopen("sd:/apps/sonoran/user.txt", "wb")) != NULL) {
+        fprintf(f, "%s\n", user);
+        fclose(f);
+    }
+    if (save_token(err, sizeof(err)) == 0)
+        snprintf(status_line, sizeof(status_line), "Logged in. Session saved to %s",
+                 token_path);
+    else
+        snprintf(status_line, sizeof(status_line), "Logged in (memory only): %s", err);
+}
+
 int main(int argc, char **argv)
 {
     char err[200];
@@ -307,7 +467,7 @@ int main(int argc, char **argv)
     /* Without a token the app still starts. The server then answers
      * with a login redirect, and the status line says so. */
     if (!load_token(argc > 0 ? argv[0] : NULL))
-        printf("No token in sd:/apps/sonoran/token.txt. See README.txt.\n");
+        printf("Not logged in yet. Push 1 to log in.\n");
 
     printf("Starting the network...\n");
     if (net_start(err, sizeof(err)) != 0 || https_init(err, sizeof(err)) != 0) {
@@ -361,6 +521,10 @@ int main(int argc, char **argv)
             detail = 0;
             redraw = 1;
         } else if (down & WPAD_BUTTON_1) {
+            login();
+            loaded[0] = loaded[1] = 0;
+            detail = 0;
+        } else if (down & WPAD_BUTTON_2) {
             pair();
             loaded[0] = loaded[1] = 0;
             detail = 0;

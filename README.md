@@ -37,9 +37,11 @@ Or send it with wiiload while the Homebrew Channel is open:
 ## Login token
 
 s.azmsh.dev is behind Authelia (401 to `auth.azmsh.dev/?rd=...`). The app
-sends the `authelia_session` cookie. It reads the value from
-`sd:/apps/sonoran/token.txt`, or gets it over the LAN in pairing mode
-(button 1, port 4300, `pair.sh`). See `dist/apps/sonoran/README.txt`.
+sends the `authelia_session` cookie. Button 1 logs in through the existing
+Authelia API (`POST https://auth.azmsh.dev/api/firstfactor`) with an
+on-screen keyboard, and saves the cookie to `sd:/apps/sonoran/token.txt`.
+Button 2 is pairing: it gets the cookie over the LAN (port 4300, `pair.sh`).
+No server change is necessary. See `dist/apps/sonoran/README.txt`.
 
 ## Known limits
 

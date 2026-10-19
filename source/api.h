@@ -9,6 +9,7 @@
 /* s.azmsh.dev is behind Authelia. Authelia keeps the login in this
  * cookie. token.txt holds its value, or a full "name=value" pair. */
 #define SESSION_COOKIE "authelia_session"
+#define AUTH_HOST "auth.azmsh.dev"
 
 struct chat_msg {
     char when[24];     /* "10-19 15:31" in Arizona time */
@@ -35,6 +36,11 @@ int api_chat(const char *token, struct chat_msg *out, int max, int *count,
              char *err, size_t errlen);
 int api_nodes(const char *token, struct node_row *out, int max, int *count,
               int *total, char *err, size_t errlen);
+
+/* Log in to Authelia (first factor). On API_OK, cookie gets
+ * "authelia_session=...". The password is not kept. */
+int api_login(const char *user, const char *password, char *cookie, size_t cookielen,
+              char *err, size_t errlen);
 
 /* Copy UTF-8 text as plain ASCII. Characters out of ASCII become '?'. */
 void to_ascii(char *dst, size_t dstlen, const char *src);

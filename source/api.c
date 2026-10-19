@@ -171,3 +171,61 @@ int api_nodes(const char *token, struct node_row *out, int max, int *count,
         *total = n; /* X-Total-Count is not read in v0.1 */
     return API_OK;
 }
+
+int api_login(const char *user, const char *password, char *cookie, size_t cookielen,
+              char *err, size_t errlen)
+{
+    struct http_reply r;
+    cJSON *req, *ans;
+    char *json;
+    int rc;
+
+    req = cJSON_CreateObject();
+    cJSON_AddStringToObject(req, "username", user);
+    cJSON_AddStringToObject(req, "password", password);
+    cJSON_AddBoolToObject(req, "keepMeLoggedIn", 1);
+    cJSON_AddStringToObject(req, "targetURL", "https://" SONORAN_HOST "/");
+    cJSON_AddStringToObject(req, "requestMethod", "GET");
+    json = cJSON_PrintUnformatted(req);
+    /* cJSON keeps a copy of the password. Wipe it before the free. */
+    cJSON_ArrayForEach(ans, req) {
+        if (cJSON_IsString(ans))
+            memset(ans->valuestring, 0, strlen(ans->valuestring));
+    }
+    cJSON_Delete(req);
+    if (json == NULL) {
+        snprintf(err, errlen, "out of memory");
+        return API_FAILED;
+    }
+
+    rc = https_request("POST", AUTH_HOST, "/api/firstfactor", NULL, SESSION_COOKIE,
+                       json, &r);
+    memset(json, 0, strlen(json));
+    cJSON_free(json);
+    if (rc != 0) {
+        snprintf(err, errlen, "%s", r.err[0] ? r.err : "request failed");
+        http_free(&r);
+        return API_FAILED;
+    }
+    if (r.status == 401) {
+        snprintf(err, errlen, "Wrong username or password.");
+        http_free(&r);
+        return API_LOGIN;
+    }
+    if (r.status == 403) {
+        snprintf(err, errlen, "Authelia refused the login (HTTP 403). "
+                 "Too many attempts? Wait and try again.");
+        http_free(&r);
+        return API_FAILED;
+    }
+    if (r.status != 200 || r.set_cookie[0] == '\0') {
+        snprintf(err, errlen, "Login failed (HTTP %d%s)", r.status,
+                 r.set_cookie[0] ? "" : ", no session cookie");
+        http_free(&r);
+        return API_FAILED;
+    }
+    snprintf(cookie, cookielen, "%s", r.set_cookie);
+    memset(r.set_cookie, 0, sizeof(r.set_cookie));
+    http_free(&r);
+    return API_OK;
+}

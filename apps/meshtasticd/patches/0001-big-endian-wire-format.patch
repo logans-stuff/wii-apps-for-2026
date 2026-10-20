@@ -1,0 +1,73 @@
+diff --git a/src/mesh/CryptoEngine.cpp b/src/mesh/CryptoEngine.cpp
+index 292adcd..8415917 100644
+--- a/src/mesh/CryptoEngine.cpp
++++ b/src/mesh/CryptoEngine.cpp
+@@ -592,9 +592,12 @@ void CryptoEngine::initNonce(uint32_t fromNode, uint64_t packetId, uint32_t extr
+ {
+     memset(nonce, 0, sizeof(nonce));
+ 
+-    // use memcpy to avoid breaking strict-aliasing
+-    memcpy(nonce, &packetId, sizeof(uint64_t));
+-    memcpy(nonce + sizeof(uint64_t), &fromNode, sizeof(uint32_t));
++    // packet id then sender, both little-endian on every host (byte-wise, so
++    // big-endian builds produce the same nonce as the rest of the mesh)
++    for (size_t i = 0; i < sizeof(uint64_t); i++)
++        nonce[i] = (uint8_t)(packetId >> (8 * i));
++    for (size_t i = 0; i < sizeof(uint32_t); i++)
++        nonce[sizeof(uint64_t) + i] = (uint8_t)(fromNode >> (8 * i));
+     if (extraNonce)
+         memcpy(nonce + sizeof(uint32_t), &extraNonce, sizeof(uint32_t));
+ }
+diff --git a/src/mesh/RadioInterface.cpp b/src/mesh/RadioInterface.cpp
+index c7ea0c2..46f5303 100644
+--- a/src/mesh/RadioInterface.cpp
++++ b/src/mesh/RadioInterface.cpp
+@@ -1512,9 +1512,9 @@ size_t RadioInterface::beginSending(meshtastic_MeshPacket *p)
+     // LOG_DEBUG("Send queued packet on mesh (txGood=%d,rxGood=%d,rxBad=%d)", rf95.txGood(), rf95.rxGood(), rf95.rxBad());
+     assert(p->which_payload_variant == meshtastic_MeshPacket_encrypted_tag); // It should have already been encoded by now
+ 
+-    radioBuffer.header.from = p->from;
+-    radioBuffer.header.to = p->to;
+-    radioBuffer.header.id = p->id;
++    radioBuffer.header.from = MESH_WIRE32(p->from);
++    radioBuffer.header.to = MESH_WIRE32(p->to);
++    radioBuffer.header.id = MESH_WIRE32(p->id);
+     radioBuffer.header.channel = p->channel;
+     radioBuffer.header.next_hop = p->next_hop;
+     radioBuffer.header.relay_node = p->relay_node;
+diff --git a/src/mesh/RadioInterface.h b/src/mesh/RadioInterface.h
+index 67870d0..694a666 100644
+--- a/src/mesh/RadioInterface.h
++++ b/src/mesh/RadioInterface.h
+@@ -28,6 +28,14 @@ typedef struct _meshtastic_Config_LoRaConfig meshtastic_Config_LoRaConfig;
+ #define PACKET_FLAGS_HOP_START_MASK 0xE0
+ #define PACKET_FLAGS_HOP_START_SHIFT 5
+ 
++// The header's multi-byte fields are little-endian on the wire. Convert at the
++// radio buffer so big-endian hosts (the Wii's PowerPC) interoperate.
++#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++#define MESH_WIRE32(x) __builtin_bswap32(x)
++#else
++#define MESH_WIRE32(x) (x)
++#endif
++
+ /**
+  * This structure has to exactly match the wire layout when sent over the radio link.  Used to keep compatibility
+  * with the old radiohead implementation.
+diff --git a/src/mesh/RadioLibInterface.cpp b/src/mesh/RadioLibInterface.cpp
+index ca53499..e155efb 100644
+--- a/src/mesh/RadioLibInterface.cpp
++++ b/src/mesh/RadioLibInterface.cpp
+@@ -678,9 +678,9 @@ void RadioLibInterface::handleReceiveInterrupt()
+             }
+ 
+             // Keep the assigned fields in sync with src/mqtt/MQTT.cpp:onReceiveProto
+-            mp->from = radioBuffer.header.from;
+-            mp->to = radioBuffer.header.to;
+-            mp->id = radioBuffer.header.id;
++            mp->from = MESH_WIRE32(radioBuffer.header.from);
++            mp->to = MESH_WIRE32(radioBuffer.header.to);
++            mp->id = MESH_WIRE32(radioBuffer.header.id);
+             mp->channel = radioBuffer.header.channel;
+             assert(HOP_MAX <= PACKET_FLAGS_HOP_LIMIT_MASK); // If hopmax changes, carefully check this code
+             mp->hop_limit = radioBuffer.header.flags & PACKET_FLAGS_HOP_LIMIT_MASK;

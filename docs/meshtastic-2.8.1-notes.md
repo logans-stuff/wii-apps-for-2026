@@ -275,3 +275,38 @@ far:
 - **Licence**: the firmware, `platform-wasm` and `framework-portduino` are
   GPL-3.0. The Wii port app has to be GPL-3.0 even though the rest of this
   repo is Unlicense.
+
+### Build status and what the first build taught us (`apps/meshtasticd`)
+
+**The firmware builds and links for the Wii** (`meshtasticd.dol`, ~1.9 MB), as
+`[env:native-wii]` on a PlatformIO `platform-wii` (platform-wasm with
+`powerpc-eabi-*` and libogc). Things that had to be solved, so nobody hits
+them twice:
+
+- **PlatformIO**: reference the platform as `symlink://` (a `file://` platform
+  is copied into the package cache and goes stale). The board manifest needs
+  `name`, `url` and `vendor`. Firmware pre-scripts `pip install` into
+  PlatformIO's venv, so the build image's venv must be writable by the build
+  user.
+- **`main()`**: a firmware header pulled in through `NodeDB.h` declares
+  `main` with different linkage. Keep the Wii entry file free of firmware
+  headers and put the firmware-facing calls in the glue.
+- **Networking can't simply be turned off**: `-DHAS_WIFI=0` isn't enough,
+  because portduino code (`SimRadio.h`, `Power.cpp`, `InterfacesTemplates.cpp`)
+  includes `WiFiServerAPI.h` unconditionally. Instead `overlay/lib/WiFi`
+  shadows framework-portduino's WiFi library (project `lib/` beats framework
+  libraries) and maps POSIX socket calls onto libogc's `net_*`. libogc returns
+  `-errno` instead of setting `errno`, and can hand out socket 0, which the
+  library treats as "none", so the shim offsets descriptors by 1.
+- **newlib gaps**: `<termios.h>` includes a missing `<sys/termios.h>`, and there
+  is no `<sys/ioctl.h>` (framework `LinuxSerial`). Stubs cover them; the Wii
+  has no serial ports.
+- **Entropy**: on a non-Linux, non-wasm portduino build `HardwareRNG` uses
+  `arc4random_buf` -> newlib `getentropy` -> `_getentropy_r`, which libogc
+  doesn't provide. The glue hashes PowerPC timebase jitter with SHA-256, and
+  HardwareRNG XORs in the SX1262's RF-noise RNG once the radio is up (the PKI
+  key is minted when the region is first set, after radio init).
+- **Big-endian**: `patches/0001-big-endian-wire-format.patch` (header fields
+  through `MESH_WIRE32`, nonce written byte-wise).
+- **Wi-Fi etiquette**: if the app brought the network up, call `net_deinit()`
+  before exiting, or HBC can't reconnect until the console reboots.

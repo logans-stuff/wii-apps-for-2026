@@ -1,0 +1,17 @@
+{
+  "build": {
+    "core": "FIXMECORE",
+    "extra_flags": "-DARCH_PORTDUINO -DARCH_PORTDUINO_WASM -DARCH_PORTDUINO_WII",
+    "variant": "native"
+  },
+  "upload": {
+    "maximum_ram_size": 99999999,
+    "maximum_size": 99999999
+  },
+  "frameworks": [
+    "arduino"
+  ],
+  "name": "Nintendo Wii (libogc)",
+  "vendor": "Meshtastic (community port)",
+  "url": "https://github.com/logans-stuff/wii-apps-for-2026"
+}

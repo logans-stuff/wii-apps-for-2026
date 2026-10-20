@@ -305,13 +305,16 @@ static void draw_map(void)
     if (dlo < 0.0008) dlo = 0.0008;
     if (dla < 0.0008) dla = 0.0008;
 
-    /* Largest zoom whose node span still fits the view (with margin). */
-    for (z = 16; z > 1; z--) {
+    /* Largest zoom whose node span fits the view, clamped to the range we
+     * pre-download (11..14) so the chosen zoom matches the tiles on SD. */
+    for (z = 14; z > 2; z--) {
         double wpx = dlo / 360.0 * (double)(256 << z);
         double hpx = (lat2px(minla, z) - lat2px(maxla, z));
         if (wpx < vw - 80 && hpx < vh - 80)
             break;
     }
+    if (z < 11) z = 11;
+    if (z > 14) z = 14;
     cx = lon2px(clo, z);
     cy = lat2px(cla, z);
 
@@ -347,8 +350,12 @@ static void draw_map(void)
     }
 
     text(10, MAP_BOT - 20, 14, C_ACC, "z%d   %d nodes located", z, np);
-    if (!drew)
-        text(80, 250, 18, C_WARN, "No map tiles on SD yet - download them (map setup).");
+    if (!drew) {
+        int ctx = (int)(cx / 256.0), cty = (int)(cy / 256.0);
+        text(60, 236, 18, C_WARN, "No tiles loaded for this area.");
+        text(60, 262, 15, C_DIM, "want: z%d  center %.4f,%.4f", z, cla, clo);
+        text(60, 284, 15, C_DIM, "tile sd:/apps/meshtoad/tiles/%d/%d/%d.png", z, ctx, cty);
+    }
 }
 
 static void draw_ui(int view, long rx, long tx, long crc)

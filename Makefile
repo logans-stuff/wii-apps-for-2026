@@ -43,6 +43,17 @@ build/headset.elf: $(HEADSET_OBJ)
 build/headset.dol: build/headset.elf
 	elf2dol $< $@
 
+# LoRa test (Meshtoad: SX1262 over a CH341 USB-SPI bridge): make build/lora.dol
+# ch341.c must use our patched USBV5 stack (ogc_usb.c), like the headset driver;
+# libogc's stock USB bulk read returns zeroed data on this console.
+LORA_OBJ := build/obj/source/loratest.o build/obj/source/sx1262.o build/obj/source/ch341.o \
+  build/obj/source/meshtastic.o build/obj/source/ogc_usb.o build/obj/source/net_wii.o \
+  $(filter build/obj/third_party/wolfssl/%,$(OBJ))
+build/lora.elf: $(LORA_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $(LORA_OBJ) $(LIBS)
+build/lora.dol: build/lora.elf
+	elf2dol $< $@
+
 build/sonoran.elf: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)
 

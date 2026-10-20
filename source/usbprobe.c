@@ -82,6 +82,28 @@ static void probe_device(const usb_device_entry *e)
             dump(what, buf, ret);
         printf("    config descriptor: %d bytes (sent to the log)\n", (int)ret);
     }
+    /* Product (2) and serial (3) strings, US English. */
+    {
+        int idx;
+        for (idx = 1; idx <= 3; idx++) {
+            char text[80];
+            int k, n;
+            memset(buf, 0, 1024);
+            ret = USB_WriteCtrlMsg(fd, USB_CTRLTYPE_DIR_DEVICE2HOST, USB_REQ_GETDESCRIPTOR,
+                                   (USB_DT_STRING << 8) | idx, 0x0409, 255, buf);
+            n = ret > 2 ? (buf[0] - 2) / 2 : 0;
+            for (k = 0; k < n && k < 79; k++)
+                text[k] = (char)buf[2 + 2 * k];
+            text[k] = '\0';
+            dbg("usb %04x:%04x string %d ret=%d: %s", e->vid, e->pid, idx, (int)ret, text);
+            if (ret > 2) {
+                char what2[48];
+                snprintf(what2, sizeof(what2), "%04x:%04x str%d", e->vid, e->pid, idx);
+                dump(what2, buf, buf[0]);
+            }
+            printf("    string %d: %s\n", idx, text);
+        }
+    }
     USB_CloseDevice(&fd);
     free(buf);
 }

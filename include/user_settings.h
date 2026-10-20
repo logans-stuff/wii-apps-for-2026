@@ -38,6 +38,9 @@ extern int sonoran_seed(unsigned char *out, unsigned int sz);
 #define GCM_TABLE_4BIT
 #define WOLFSSL_AES_128
 #define WOLFSSL_AES_256
+/* AES-CTR for Meshtastic channel decryption (source/meshtastic.c). */
+#define WOLFSSL_AES_COUNTER
+#define WOLFSSL_AES_DIRECT
 #define HAVE_CHACHA
 #define HAVE_POLY1305
 #define WOLFSSL_SHA384

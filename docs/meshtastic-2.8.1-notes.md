@@ -310,3 +310,37 @@ them twice:
   through `MESH_WIRE32`, nonce written byte-wise).
 - **Wi-Fi etiquette**: if the app brought the network up, call `net_deinit()`
   before exiting, or HBC can't reconnect until the console reboots.
+
+### First hardware bring-up (what the Wii taught us)
+
+**It runs.** On a Wii with a MeshToad, the 2.8.1 firmware inits the SX1262,
+generates its PKI keys, applies `config.txt` and joins the mesh. Its first
+act was to receive a 6-hop traceroute and rebroadcast it, with managed
+flooding (hop limit 2->1, SNR-weighted delay).
+
+- **Wii USB DMA must use MEM2.** With bulk IN buffers from `memalign()`
+  (MEM1) only the whole 4-byte words of a reply landed: a 1-3 byte SPI reply
+  never arrived, and a 5-6 byte one arrived as 4. Every short SX1262 command's
+  status byte was garbage, and RadioLib aborted init with -707 then -705
+  ("command failed", "timeout"). Buffers from an IOS heap
+  (`iosCreateHeap`/`iosAlloc`, MEM2) fix it. This also explains the old
+  Meshtoad driver's "unreliable GetStatus" and dropped-byte symptoms: its
+  one shared buffer just handed back stale bytes. **Any Wii USB driver
+  should DMA from MEM2.**
+- **Debug method**: `WII_EXTRA_FLAGS="-DRADIOLIB_DEBUG_BASIC=1
+  -DRADIOLIB_DEBUG_SPI=1"` prints every SPI transfer. Pre-filling the IN
+  buffer with `0xEE` (bit-reversed `0x77`) makes "nothing arrived"
+  unmistakable.
+- **libfat `rename()` won't overwrite**: `patches/0002`.
+- **First boot is slow**: PKI keygen mixes 64 bytes from the SX1262 RNG,
+  ~20 radio commands per byte over USB, about **67 s**. After that the
+  keys are saved. In 2.8 the node number is derived from the public key,
+  so it changes once at that point.
+- **Config changes reboot**: changing the LoRa preset makes AdminModule
+  schedule a reboot. On the Wii `reboot()` returns to the loader; relaunch
+  and the saved settings are used.
+- **Never busy-drain the PhoneAPI without a client handshake**:
+  `available()`/`getFromRadio()` can keep returning data, so the main loop
+  hangs. MeshService already drops the oldest entry of a full client queue.
+- **Exiting**: a watcher thread handles Home/Reset, because `setup()` can
+  run for a minute. `exit()` is wrapped to log, flush and pause on errors.

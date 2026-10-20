@@ -43,11 +43,14 @@ endif
 GRR := $(ROOT)/third_party/GRRLIB/GRRLIB/GRRLIB
 ifeq ($(USE_GRRLIB),1)
   CFLAGS += -I$(GRR) -I$(GRR)/../lib/pngu -I$(DEVKITPRO)/portlibs/ppc/include/freetype2
-  # All of GRRLIB plus pngu, so PNG tile loading (GRRLIB_LoadTextureFromFile)
-  # works for the offline map.
-  GRR_OBJ := $(patsubst %.c,build/grrlib/%.o,$(notdir $(wildcard $(GRR)/*.c))) build/grrlib/pngu.o
+  # GRRLIB + pngu for PNG tile loading, but WITHOUT the TTF path: we use the
+  # built-in bitmap font (GRRLIB_PrintfSystemFont), so no freetype -> a much
+  # smaller .dol that writes to SD and transfers reliably. GRRLIB_InitTTF /
+  # GRRLIB_ExitTTF are stubbed in the app.
+  GRR_SRC := $(filter-out %GRRLIB_ttf.c,$(wildcard $(GRR)/*.c))
+  GRR_OBJ := $(patsubst %.c,build/grrlib/%.o,$(notdir $(GRR_SRC))) build/grrlib/pngu.o
   OBJ += $(GRR_OBJ)
-  GRR_LIBS := -lfreetype -lpng16 -ljpeg -lbz2 -lbrotlidec -lbrotlicommon -lz
+  GRR_LIBS := -lpng16 -ljpeg -lz
 endif
 
 build/$(APP).dol: build/$(APP).elf

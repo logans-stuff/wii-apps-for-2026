@@ -17,12 +17,15 @@
 #include "meshtastic.h"
 #include "nodedb.h"
 #include "config.h"
-#include "font_dejavu.h"
 
 #define NODEDB_PATH "sd:/apps/meshtoad/nodedb.dat"
 
 static struct mesh_config CFG;
-static GRRLIB_ttfFont *FONT;
+
+/* We use GRRLIB's built-in bitmap font, not TTF, so stub the TTF init/exit
+ * that GRRLIB's core calls (GRRLIB_ttf.c is not compiled -> no freetype). */
+int GRRLIB_InitTTF(void) { return 0; }
+void GRRLIB_ExitTTF(void) {}
 
 /* Palette (RGBA8). */
 #define C_BG     0x0E1522FF
@@ -53,18 +56,20 @@ static void text(int x, int y, int size, u32 col, const char *fmt, ...)
     va_list ap;
     unsigned char *p;
 
-    if (FONT == NULL)
-        return;
     va_start(ap, fmt);
     vsnprintf(s, sizeof(s), fmt, ap);
     va_end(ap);
-    /* GRRLIB's TTF renderer decodes UTF-8 and faults on multibyte / malformed
-     * bytes (e.g. emoji in a received node name). Force plain printable ASCII
-     * so every glyph is a valid single byte. */
+    /* Force printable ASCII (emoji/multibyte in mesh names -> '?'). */
     for (p = (unsigned char *)s; *p; p++)
         if (*p < 0x20 || *p > 0x7e)
             *p = '?';
-    GRRLIB_PrintfTTF(x, y, FONT, s, size, col);
+    GRRLIB_PrintfSystemFont(x, y, s, size, col);
+}
+
+/* Approximate rendered width of a string in the bitmap font, for alignment. */
+static int text_w(const char *s, int size)
+{
+    return (int)strlen(s) * size * 6 / 10;
 }
 
 static void log_add(const char *s)
@@ -176,7 +181,7 @@ static void draw_header(int view, long rx, long tx, long crc)
         snprintf(cnt, sizeof(cnt), "Messages %d", msg_count);
     else
         snprintf(cnt, sizeof(cnt), "Map");
-    w = FONT ? GRRLIB_WidthTTF(FONT, cnt, 15) : 0;
+    w = text_w(cnt, 15);
     text(SCR_W - w - 12, 8, 15, C_DIM, "%s", cnt);
 }
 
@@ -421,7 +426,6 @@ static void fatal(const char *msg)
         GRRLIB_Render();
     }
     net_stop();
-    GRRLIB_FreeTTF(FONT);
     GRRLIB_Exit();
 }
 
@@ -434,7 +438,6 @@ int main(void)
 
     GRRLIB_Init();
     WPAD_Init();
-    FONT = GRRLIB_LoadTTF(dejavu_ttf, dejavu_ttf_len);
     loading("Starting...");
     nodedb_reset();
     loading("Reading config + NodeDB from SD...");
@@ -541,7 +544,6 @@ int main(void)
     nodedb_save(NODEDB_PATH);
     dbg("lora: exit (rx %ld tx %ld, %d nodes)", packets, sent, nodedb_count());
     net_stop();
-    GRRLIB_FreeTTF(FONT);
     GRRLIB_Exit();
     return 0;
 }

@@ -42,11 +42,10 @@ ifeq ($(USE_OGC_USB),1)
 endif
 GRR := $(ROOT)/third_party/GRRLIB/GRRLIB/GRRLIB
 ifeq ($(USE_GRRLIB),1)
-  CFLAGS += -I$(GRR) -I$(DEVKITPRO)/portlibs/ppc/include/freetype2
-  # Exclude the PNG/JPEG texture loaders (need pngu, which we don't ship);
-  # we only use shapes and TTF text.
-  GRR_SRC := $(filter-out %GRRLIB_fileIO.c %GRRLIB_texEdit.c,$(wildcard $(GRR)/*.c))
-  GRR_OBJ := $(patsubst %.c,build/grrlib/%.o,$(notdir $(GRR_SRC)))
+  CFLAGS += -I$(GRR) -I$(GRR)/../lib/pngu -I$(DEVKITPRO)/portlibs/ppc/include/freetype2
+  # All of GRRLIB plus pngu, so PNG tile loading (GRRLIB_LoadTextureFromFile)
+  # works for the offline map.
+  GRR_OBJ := $(patsubst %.c,build/grrlib/%.o,$(notdir $(wildcard $(GRR)/*.c))) build/grrlib/pngu.o
   OBJ += $(GRR_OBJ)
   GRR_LIBS := -lfreetype -lpng16 -ljpeg -lbz2 -lbrotlidec -lbrotlicommon -lz
 endif
@@ -58,6 +57,9 @@ build/$(APP).elf: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(GRR_LIBS) $(APP_LIBS)
 
 build/grrlib/%.o: $(GRR)/%.c
+	@mkdir -p build/grrlib
+	$(CC) $(CFLAGS) -c -o $@ $<
+build/grrlib/pngu.o: $(GRR)/../lib/pngu/pngu.c
 	@mkdir -p build/grrlib
 	$(CC) $(CFLAGS) -c -o $@ $<
 

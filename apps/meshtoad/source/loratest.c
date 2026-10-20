@@ -233,11 +233,50 @@ static void draw_messages(void)
     }
 }
 
+#define MAP_TOP 52
+#define MAP_BOT (SCR_H - 26)
+#define TCACHE 20
+static struct { int z, x, y, tried; GRRLIB_texImg *tex; } tcache[TCACHE];
+
+static double lon2px(double lon, int z) { return (lon + 180.0) / 360.0 * (double)(256 << z); }
+static double lat2px(double lat, int z)
+{
+    double r = lat * M_PI / 180.0;
+    return (1.0 - log(tan(r) + 1.0 / cos(r)) / M_PI) / 2.0 * (double)(256 << z);
+}
+
+/* Load an OSM tile sd:/apps/meshtoad/tiles/z/x/y.png (cached). NULL if absent. */
+static GRRLIB_texImg *get_tile(int z, int x, int y)
+{
+    char path[96];
+    int i, slot = -1;
+    if (x < 0 || y < 0 || x >= (1 << z) || y >= (1 << z))
+        return NULL;
+    for (i = 0; i < TCACHE; i++)
+        if (tcache[i].tried && tcache[i].z == z && tcache[i].x == x && tcache[i].y == y)
+            return tcache[i].tex;
+    for (i = 0; i < TCACHE; i++)
+        if (!tcache[i].tried) { slot = i; break; }
+    if (slot < 0) {
+        slot = 0;
+        if (tcache[0].tex)
+            GRRLIB_FreeTexture(tcache[0].tex);
+    }
+    snprintf(path, sizeof(path), "sd:/apps/meshtoad/tiles/%d/%d/%d.png", z, x, y);
+    tcache[slot].tex = GRRLIB_LoadTextureFromFile(path);
+    tcache[slot].z = z;
+    tcache[slot].x = x;
+    tcache[slot].y = y;
+    tcache[slot].tried = 1;
+    return tcache[slot].tex;
+}
+
 static void draw_map(void)
 {
-    int count = nodedb_count(), i, np = 0;
+    int count = nodedb_count(), i, np = 0, z, tx, ty, tx0, tx1, ty0, ty1, drew = 0;
     double minla = 1e9, maxla = -1e9, minlo = 1e9, maxlo = -1e9, cla, clo, dla, dlo;
-    int mx = 16, my = 60, mw = SCR_W - 32, mh = SCR_H - 60 - 30;
+    double cx, cy;
+    int scx = SCR_W / 2, scy = (MAP_TOP + MAP_BOT) / 2, vw = SCR_W, vh = MAP_BOT - MAP_TOP;
 
     for (i = 0; i < count; i++) {
         const struct node *nd = nodedb_get(i);
@@ -254,16 +293,38 @@ static void draw_map(void)
         text(40, 242, 16, C_DIM, "Nodes that broadcast GPS will plot here.");
         return;
     }
-    dla = maxla - minla;
-    dlo = maxlo - minlo;
-    if (dla < 0.0005) dla = 0.0005;
-    if (dlo < 0.0005) dlo = 0.0005;
     cla = (minla + maxla) / 2;
     clo = (minlo + maxlo) / 2;
+    dla = maxla - minla;
+    dlo = maxlo - minlo;
+    if (dlo < 0.0008) dlo = 0.0008;
+    if (dla < 0.0008) dla = 0.0008;
 
-    GRRLIB_Rectangle(mx, my, mw, mh, C_ROW, 0);
-    text(mx + 4, 32, 14, C_DIM, "~%.1f x %.1f km   %d located",
-         dla * 111.0, dlo * 111.0 * cos(cla * 3.14159265 / 180.0), np);
+    /* Largest zoom whose node span still fits the view (with margin). */
+    for (z = 16; z > 1; z--) {
+        double wpx = dlo / 360.0 * (double)(256 << z);
+        double hpx = (lat2px(minla, z) - lat2px(maxla, z));
+        if (wpx < vw - 80 && hpx < vh - 80)
+            break;
+    }
+    cx = lon2px(clo, z);
+    cy = lat2px(cla, z);
+
+    tx0 = (int)floor((cx - vw / 2.0) / 256.0);
+    tx1 = (int)floor((cx + vw / 2.0) / 256.0);
+    ty0 = (int)floor((cy - vh / 2.0) / 256.0);
+    ty1 = (int)floor((cy + vh / 2.0) / 256.0);
+    for (ty = ty0; ty <= ty1; ty++)
+        for (tx = tx0; tx <= tx1; tx++) {
+            GRRLIB_texImg *t = get_tile(z, tx, ty);
+            int px = scx + (int)(tx * 256 - cx), py = scy + (int)(ty * 256 - cy);
+            if (t != NULL) {
+                GRRLIB_DrawImg(px, py, t, 0, 1, 1, 0xFFFFFFFF);
+                drew++;
+            } else {
+                GRRLIB_Rectangle(px, py, 256, 256, C_ROW, 1);
+            }
+        }
 
     for (i = 0; i < count; i++) {
         const struct node *nd = nodedb_get(i);
@@ -271,30 +332,33 @@ static void draw_map(void)
         u32 col;
         if (nd == NULL || !nd->has_pos)
             continue;
-        px = mx + (int)((nd->lon - (clo - dlo * 0.6)) / (dlo * 1.2) * mw);
-        py = my + (int)(((cla + dla * 0.6) - nd->lat) / (dla * 1.2) * mh);
-        if (px < mx + 2) px = mx + 2;
-        if (px > mx + mw - 2) px = mx + mw - 2;
-        if (py < my + 2) py = my + 2;
-        if (py > my + mh - 2) py = my + mh - 2;
-        col = (i == node_sel) ? C_WARN : C_ACC;
+        px = scx + (int)(lon2px(nd->lon, z) - cx);
+        py = scy + (int)(lat2px(nd->lat, z) - cy);
+        col = (i == node_sel) ? C_WARN : C_GOOD;
         r = (i == node_sel) ? 6 : 4;
+        GRRLIB_Rectangle(px - r - 1, py - r - 1, r * 2 + 2, r * 2 + 2, 0x000000FF, 1);
         GRRLIB_Rectangle(px - r, py - r, r * 2, r * 2, col, 1);
-        text(px + 8, py - 9, 15, i == node_sel ? C_TEXT : C_DIM, "%-4.4s",
-             nd->has_name ? nd->short_name : "----");
+        text(px + 8, py - 9, 15, C_TEXT, "%-4.4s", nd->has_name ? nd->short_name : "----");
     }
+
+    text(10, MAP_BOT - 20, 14, C_ACC, "z%d   %d nodes located", z, np);
+    if (!drew)
+        text(80, 250, 18, C_WARN, "No map tiles on SD yet - download them (map setup).");
 }
 
 static void draw_ui(int view, long rx, long tx, long crc)
 {
     GRRLIB_FillScreen(C_BG);
-    draw_header(view, rx, tx, crc);
-    if (view == VIEW_NODES)
-        draw_nodes();
-    else if (view == VIEW_MESSAGES)
-        draw_messages();
-    else
-        draw_map();
+    if (view == VIEW_MAP) {
+        draw_map();                 /* tiles can overflow; header masks the top */
+        draw_header(view, rx, tx, crc);
+    } else {
+        draw_header(view, rx, tx, crc);
+        if (view == VIEW_NODES)
+            draw_nodes();
+        else
+            draw_messages();
+    }
     GRRLIB_Rectangle(0, SCR_H - 26, SCR_W, 26, C_BAR, 1);
     text(10, SCR_H - 22, 16, C_DIM,
          "up/down scroll   1 view   A type   2 quick   B announce   Home exit");

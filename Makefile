@@ -22,6 +22,19 @@ build/probe.elf: $(PROBE_OBJ)
 build/probe.dol: build/probe.elf
 	elf2dol $< $@
 
+# DAVE link test: make build/davetest.dol (needs ports/out from ports/build-*.sh)
+PORTS := ports/out
+DAVE_LIBS := -L$(PORTS)/lib -ldave -lmlspp -lmls_ds -lhpke -ltls_syntax -lbytes -lcrypto -lstdc++
+build/obj/source/davetest.o: source/davetest.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I$(PORTS)/include -c -o $@ $<
+DAVETEST_OBJ := build/obj/source/davetest.o build/obj/source/posix_stubs.o build/obj/source/net_wii.o \
+  $(filter build/obj/third_party/wolfssl/%,$(OBJ))
+build/davetest.elf: $(DAVETEST_OBJ)
+	$(CXX) $(LDFLAGS) -o $@ $(DAVETEST_OBJ) $(DAVE_LIBS) $(LIBS)
+build/davetest.dol: build/davetest.elf
+	elf2dol $< $@
+
 # Headset test: make build/headset.dol
 HEADSET_OBJ := build/obj/source/headset.o build/obj/source/usbaudio.o build/obj/source/ogc_usb.o build/obj/source/net_wii.o \
   $(filter build/obj/third_party/wolfssl/%,$(OBJ))

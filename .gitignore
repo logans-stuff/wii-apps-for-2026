@@ -4,3 +4,6 @@ dist/apps/sonoran/boot.dol
 third_party/
 *.zip
 token.txt
+ports/out/
+ports/build-*/
+ports/*.log

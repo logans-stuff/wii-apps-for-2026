@@ -46,6 +46,11 @@ build/headset.dol: build/headset.elf
 build/sonoran.elf: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)
 
+# The headset driver logs to the Sonoran debug log in this repo.
+build/obj/source/usbaudio.o: source/usbaudio.c source/usbaudio.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -DSONORAN_DEBUG -c -o $@ $<
+
 # Our copy of libogc's usb.c needs libogc's own headers.
 LIBOGC_SRC := third_party/libogc
 build/obj/source/ogc_usb.o: source/ogc_usb.c

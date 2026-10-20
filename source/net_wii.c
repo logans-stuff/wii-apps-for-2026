@@ -235,3 +235,60 @@ unsigned long long net_ms(void)
 {
     return ticks_to_millisecs(gettime());
 }
+
+/* ---- UDP ---- */
+
+static struct sockaddr_in udp_dest[4];
+static s32 udp_fd[4] = { -1, -1, -1, -1 };
+
+int udp_open(const char *ip, int port, char *err, size_t errlen)
+{
+    int i;
+
+    for (i = 0; i < 4 && udp_fd[i] >= 0; i++)
+        ;
+    if (i == 4) {
+        snprintf(err, errlen, "too many UDP sockets");
+        return -1;
+    }
+    udp_fd[i] = net_socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (udp_fd[i] < 0) {
+        snprintf(err, errlen, "UDP socket failed (%d)", (int)udp_fd[i]);
+        udp_fd[i] = -1;
+        return -1;
+    }
+    memset(&udp_dest[i], 0, sizeof(udp_dest[i]));
+    udp_dest[i].sin_family = AF_INET;
+    udp_dest[i].sin_len = sizeof(udp_dest[i]);
+    udp_dest[i].sin_port = htons(port);
+    udp_dest[i].sin_addr.s_addr = inet_addr(ip);
+    return i;
+}
+
+int udp_send(int handle, const void *data, int len)
+{
+    if (handle < 0 || handle >= 4 || udp_fd[handle] < 0)
+        return -1;
+    return net_sendto(udp_fd[handle], data, len, 0, (struct sockaddr *)&udp_dest[handle],
+                      sizeof(udp_dest[handle]));
+}
+
+int udp_recv(int handle, void *buf, int len, int ms)
+{
+    struct sockaddr_in from;
+    socklen_t fromlen = sizeof(from);
+
+    if (handle < 0 || handle >= 4 || udp_fd[handle] < 0)
+        return -1;
+    if (tcp_wait_readable(udp_fd[handle], ms) <= 0)
+        return 0;
+    return net_recvfrom(udp_fd[handle], buf, len, 0, (struct sockaddr *)&from, &fromlen);
+}
+
+void udp_close(int handle)
+{
+    if (handle < 0 || handle >= 4 || udp_fd[handle] < 0)
+        return;
+    net_close(udp_fd[handle]);
+    udp_fd[handle] = -1;
+}

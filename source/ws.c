@@ -125,9 +125,30 @@ int ws_send_text(struct ws *w, const char *text)
     return send_frame(w, 0x1, (const unsigned char *)text, strlen(text));
 }
 
+int ws_send_binary(struct ws *w, const unsigned char *data, size_t len)
+{
+    return send_frame(w, 0x2, data, len);
+}
+
+/* Read and drop n bytes. */
+static int drop_bytes(struct ws *w, unsigned long long n)
+{
+    unsigned char tmp[1024];
+
+    while (n > 0) {
+        size_t k = n > sizeof(tmp) ? sizeof(tmp) : (size_t)n;
+        if (read_exact(w, tmp, k) != 0)
+            return -1;
+        n -= k;
+    }
+    return 0;
+}
+
 int ws_recv(struct ws *w, int ms)
 {
     unsigned long long start = net_ms();
+    size_t max = w->max_msg ? w->max_msg : WS_MAX_MSG;
+    int dropping = 0;
 
     free(w->msg);
     w->msg = NULL;
@@ -140,7 +161,7 @@ int ws_recv(struct ws *w, int ms)
 
         if (left < 0)
             left = 0;
-        if (w->msg == NULL && !tls_readable(&w->tls, left))
+        if (w->msg == NULL && !dropping && !tls_readable(&w->tls, left))
             return 0;
         if (read_exact(w, h, 2) != 0)
             return -1;
@@ -160,7 +181,21 @@ int ws_recv(struct ws *w, int ms)
         }
         if (h[1] & 0x80) /* a server must not mask */
             return -1;
-        if (len > WS_MAX_MSG || w->msg_len + len > WS_MAX_MSG)
+        if (opcode < 0x8 && (dropping || len > max || w->msg_len + len > max)) {
+            /* Too large (for example the Discord READY event): drop it. */
+            if (drop_bytes(w, len) != 0)
+                return -1;
+            free(w->msg);
+            w->msg = NULL;
+            w->msg_len = 0;
+            dropping = 1;
+            if (fin) {
+                dbg("ws: dropped a large message");
+                return 2;
+            }
+            continue;
+        }
+        if (len > 125 && opcode >= 0x8)
             return -1;
         payload = malloc((size_t)len + 1);
         if (payload == NULL || read_exact(w, payload, (size_t)len) != 0) {
@@ -187,6 +222,7 @@ int ws_recv(struct ws *w, int ms)
         if (w->msg == NULL) {
             w->msg = (char *)payload;
             w->msg_len = (size_t)len;
+            w->binary = opcode == 0x2;
         } else {
             char *joined = realloc(w->msg, w->msg_len + (size_t)len + 1);
             if (joined == NULL) {

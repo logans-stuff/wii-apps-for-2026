@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 
 #include "net.h"
@@ -107,4 +109,49 @@ unsigned long long net_ms(void)
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (unsigned long long)ts.tv_sec * 1000 + (unsigned long long)ts.tv_nsec / 1000000;
+}
+
+/* ---- UDP ---- */
+
+static struct sockaddr_in udp_dest[4];
+static int udp_fd[4] = { -1, -1, -1, -1 };
+
+int udp_open(const char *ip, int port, char *err, size_t errlen)
+{
+    int i;
+
+    for (i = 0; i < 4 && udp_fd[i] >= 0; i++)
+        ;
+    if (i == 4 || (udp_fd[i] = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        snprintf(err, errlen, "UDP socket failed");
+        if (i < 4)
+            udp_fd[i] = -1;
+        return -1;
+    }
+    memset(&udp_dest[i], 0, sizeof(udp_dest[i]));
+    udp_dest[i].sin_family = AF_INET;
+    udp_dest[i].sin_port = htons(port);
+    udp_dest[i].sin_addr.s_addr = inet_addr(ip);
+    return i;
+}
+
+int udp_send(int handle, const void *data, int len)
+{
+    return (int)sendto(udp_fd[handle], data, (size_t)len, 0, (struct sockaddr *)&udp_dest[handle],
+                       sizeof(udp_dest[handle]));
+}
+
+int udp_recv(int handle, void *buf, int len, int ms)
+{
+    if (tcp_wait_readable(udp_fd[handle], ms) <= 0)
+        return 0;
+    return (int)recv(udp_fd[handle], buf, (size_t)len, 0);
+}
+
+void udp_close(int handle)
+{
+    if (handle >= 0 && handle < 4 && udp_fd[handle] >= 0)
+        close(udp_fd[handle]);
+    if (handle >= 0 && handle < 4)
+        udp_fd[handle] = -1;
 }

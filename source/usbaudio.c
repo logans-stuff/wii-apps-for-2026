@@ -11,10 +11,25 @@
 #include <unistd.h>
 
 #include <gccore.h>
+#include <ogc/lwp_watchdog.h>
 #include <ogc/usb.h>
 
-#include "net.h"
 #include "usbaudio.h"
+
+/* Logging: Sonoran builds with -DSONORAN_DEBUG and sends the lines to its
+ * debug log. Other programs can define UA_LOG themselves, or get none. */
+#ifdef SONORAN_DEBUG
+#include "net.h"
+#define UA_LOG dbg
+#endif
+#ifndef UA_LOG
+#define UA_LOG(...) do { if (0) printf(__VA_ARGS__); } while (0)
+#endif
+
+static unsigned long long ua_ms(void)
+{
+    return ticks_to_millisecs(gettime());
+}
 
 struct stream {
     int iface, alt, ep, maxpkt, channels, bits;
@@ -132,7 +147,7 @@ int ua_open(char *info, size_t infolen, char *err, size_t errlen)
         snprintf(err, errlen, "no USB audio headset found");
         return -1;
     }
-    dbg("ua: %s", info);
+    UA_LOG("ua: %s", info);
     /* Find the IOS entry of the mic and of the headphone interfaces. */
     for (i = 0; i < cnt; i++) {
         s32 dev;
@@ -140,7 +155,7 @@ int ua_open(char *info, size_t infolen, char *err, size_t errlen)
         if (USB_OpenDevice(list[i].device_id, list[i].vid, list[i].pid, &dev) < 0)
             continue;
         n = iface_of(dev);
-        dbg("ua: entry %08x is interface %d", (unsigned)list[i].device_id, n);
+        UA_LOG("ua: entry %08x is interface %d", (unsigned)list[i].device_id, n);
         if (n == mic.iface && mic.ep && !mic_open) {
             mic_fd = dev;
             mic_open = 1;
@@ -157,7 +172,7 @@ int ua_open(char *info, size_t infolen, char *err, size_t errlen)
         spk_fd = fd;
     if (mic.ep) {
         ret = set_alt(mic_fd, mic.alt);
-        dbg("ua: mic set_alt(%08x, %d) = %d", (unsigned)mic_fd, mic.alt, (int)ret);
+        UA_LOG("ua: mic set_alt(%08x, %d) = %d", (unsigned)mic_fd, mic.alt, (int)ret);
     }
     /* The headphones are switched on only while they play (ua_play).
      * A headset that stays on with no data can buzz.
@@ -168,7 +183,7 @@ int ua_open(char *info, size_t infolen, char *err, size_t errlen)
      * once here, with silence, before the user records. */
     if (spk.ep && mic.ep) {
         static int16_t warm[48 * 320];
-        unsigned long long t0 = net_ms();
+        unsigned long long t0 = ua_ms();
         int n, i, peak = 0;
         ua_play(warm, 48 * 300);
         n = ua_record(warm, 48 * 320, NULL);
@@ -177,8 +192,8 @@ int ua_open(char *info, size_t infolen, char *err, size_t errlen)
                 peak = abs(warm[i]);
         memset(warm, 0, sizeof(warm));
         ua_play(warm, 48 * 300);
-        dbg("ua: warm-up (play, record %d samples peak %d, play) took %llu ms", n, peak,
-            net_ms() - t0);
+        UA_LOG("ua: warm-up (play, record %d samples peak %d, play) took %llu ms", n, peak,
+            ua_ms() - t0);
     }
     return 0;
 }
@@ -238,7 +253,7 @@ static int queue_ready(void)
         /* A transfer that timed out can still belong to IOS. Do not take
          * its buffer back by force. */
         if (q[i].busy) {
-            dbg("ua: transfer %d still busy, not starting", i);
+            UA_LOG("ua: transfer %d still busy, not starting", i);
             return -1;
         }
     }
@@ -249,9 +264,9 @@ static int queue_ready(void)
  * (then IOS still owns its buffer). */
 static int wait_xfer(struct xfer *x)
 {
-    unsigned long long t0 = net_ms();
+    unsigned long long t0 = ua_ms();
 
-    while (x->busy && net_ms() - t0 < 1000)
+    while (x->busy && ua_ms() - t0 < 1000)
         usleep(200);
     return x->busy ? -1 : 0;
 }
@@ -296,13 +311,13 @@ int ua_record(int16_t *out, int max_samples, int (*keep_going)(void))
         int p, s;
 
         if (wait_xfer(x) != 0) {
-            dbg("ua: mic transfer timed out");
+            UA_LOG("ua: mic transfer timed out");
             wait_all();
             return got > 0 ? got : -1;
         }
         if (x->result < 0 && ++errors >= 10) {
             /* Stop, also without keep_going (the warm-up), or it never ends. */
-            dbg("ua: mic transfers fail (%d)", (int)x->result);
+            UA_LOG("ua: mic transfers fail (%d)", (int)x->result);
             stop = 1;
         }
         if (x->result >= 0 && got + chunk <= max_samples && !stop) {
@@ -346,12 +361,12 @@ int ua_play(const int16_t *in, int samples)
     if (!fd_open || spk.ep == 0)
         return -1;
     ret = set_alt(spk_fd, spk.alt);
-    dbg("ua: spk on = %d", (int)ret);
+    UA_LOG("ua: spk on = %d", (int)ret);
     play_raw(silence, 48 * 64);
     rc = play_raw(in, samples);
     play_raw(silence, 48 * 32);
     ret = set_alt(spk_fd, 0);
-    dbg("ua: spk off = %d", (int)ret);
+    UA_LOG("ua: spk off = %d", (int)ret);
     return rc;
 }
 
@@ -369,7 +384,7 @@ static int play_raw(const int16_t *in, int samples)
         int p, s, c;
 
         if (wait_xfer(x) != 0) {
-            dbg("ua: headphone transfer timed out");
+            UA_LOG("ua: headphone transfer timed out");
             wait_all();
             return -1;
         }

@@ -7,3 +7,9 @@ token.txt
 ports/out/
 ports/build-*/
 ports/*.log
+driver/wii-usb-headset/libogc/
+driver/wii-usb-headset/build/
+driver/wii-usb-headset/*.elf
+driver/*.zip
+driver/wii-usb-headset/headset.dol
+driver/wii-usb-headset/apps/

@@ -17,6 +17,13 @@ void tcp_close(int handle);
  * Return 1 when it has data, 0 on timeout, negative on error. */
 int tcp_wait_readable(int handle, int ms);
 
+/* UDP "connection" to one IPv4 address (dotted text) and port.
+ * udp_recv waits up to ms; it returns bytes, 0 on timeout, < 0 on error. */
+int udp_open(const char *ip, int port, char *err, size_t errlen);
+int udp_send(int handle, const void *data, int len);
+int udp_recv(int handle, void *buf, int len, int ms);
+void udp_close(int handle);
+
 /* Milliseconds from some fixed time. */
 unsigned long long net_ms(void);
 

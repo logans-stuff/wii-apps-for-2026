@@ -34,6 +34,9 @@ endif
 ifeq ($(USE_NET),1)
   OBJ += build/net_wii.o
 endif
+ifeq ($(USE_OSK),1)
+  OBJ += build/osk.o
+endif
 ifeq ($(USE_OGC_USB),1)
   OBJ += build/ogc_usb.o
 endif
@@ -50,6 +53,10 @@ build/%.o: source/%.c
 
 # Shared sources live in ../../common; compile them into this app's build dir.
 build/net_wii.o: $(ROOT)/common/net_wii.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+build/osk.o: $(ROOT)/common/osk.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) -c -o $@ $<
 

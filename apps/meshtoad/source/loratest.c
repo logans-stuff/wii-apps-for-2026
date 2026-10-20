@@ -217,7 +217,8 @@ int main(void)
     nodedb_reset();
     config_load(&CFG);               /* sd:/apps/meshtoad/config.txt, else defaults */
     mesh_set_key(CFG.key, CFG.keylen);
-    nodedb_load(NODEDB_PATH);         /* restore nodes heard in earlier sessions */
+    dbg("lora: nodedb load rc=%d, %d nodes restored",
+        nodedb_load(NODEDB_PATH), nodedb_count());
     printf("\x1b[2;1HSonoran LoRa node  (!%08x \"%s\", %s)\n",
            CFG.node_id, CFG.long_name, CFG.source);
     if (net_start(err, sizeof(err)) != 0)
@@ -347,9 +348,11 @@ int main(void)
     }
 
     sx_close();
-    nodedb_save(NODEDB_PATH); /* keep what we heard for next time */
-    dbg("lora: exit (rx %ld, crc %ld, tx %ld, %d nodes saved)", packets, crc_errors,
-        sent, nodedb_count());
+    {
+        int rc = nodedb_save(NODEDB_PATH); /* keep what we heard for next time */
+        dbg("lora: exit (rx %ld, crc %ld, tx %ld) nodedb save rc=%d, %d nodes",
+            packets, crc_errors, sent, rc, nodedb_count());
+    }
     net_stop();
     return 0;
 }

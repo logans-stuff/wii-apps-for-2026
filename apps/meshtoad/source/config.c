@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include <fat.h>
 
@@ -76,6 +77,11 @@ void config_load(struct mesh_config *c)
     defaults(c);
     if (!fatInitDefault())
         return; /* no SD: keep defaults */
+
+    /* Make sure our app folder exists, so the config and NodeDB can be saved
+     * even when the app was sent over wiiload rather than installed. */
+    mkdir("sd:/apps", 0777);
+    mkdir("sd:/apps/meshtoad", 0777);
 
     f = fopen("sd:/apps/meshtoad/config.txt", "r");
     if (f == NULL)

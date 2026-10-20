@@ -6,10 +6,13 @@
 #include <string.h>
 
 #include <gccore.h>
+#include <ogc/lwp_watchdog.h>
 #include <wiiuse/wpad.h>
 
 #include "net.h"
 #include "usbaudio.h"
+
+#include <opus.h>
 
 #define MAX_SECONDS 8
 #define MAX_SAMPLES (UA_RATE * MAX_SECONDS)
@@ -60,7 +63,7 @@ int main(void)
         }
     }
     printf("Headset: %s\n\n", info);
-    printf("Hold A and speak into the microphone (up to %d s).\n", MAX_SECONDS);
+    printf("Hold A and speak (up to %d s). It plays back through Opus 64 kbps.\n", MAX_SECONDS);
     printf("Release A to hear it in the headset. Home = exit.\n\n");
 
     for (;;) {
@@ -87,6 +90,48 @@ int main(void)
                 int v = abs(rec[i]);
                 if (v > peak)
                     peak = v;
+            }
+            if (n >= 960) {
+                /* Opus round trip, the same settings as Discord voice:
+                 * 48 kHz, 20 ms frames (960 samples), 64 kbps. */
+                int err2, f, frames = n / 960;
+                static unsigned char pkt[1500];
+                static OpusEncoder *enc;
+                static OpusDecoder *dec;
+                unsigned long long te = 0, td = 0, worst_e = 0, worst_d = 0;
+                long bytes = 0;
+                if (enc == NULL) {
+                    enc = opus_encoder_create(48000, 1, OPUS_APPLICATION_VOIP, &err2);
+                    dec = opus_decoder_create(48000, 1, &err2);
+                    opus_encoder_ctl(enc, OPUS_SET_BITRATE(64000));
+                }
+                for (f = 0; f < frames; f++) {
+                    unsigned long long t0 = gettime(), t1, t2;
+                    int len = opus_encode(enc, rec + f * 960, 960, pkt, sizeof(pkt));
+                    t1 = gettime();
+                    if (len > 0) {
+                        bytes += len;
+                        if (opus_decode(dec, pkt, len, rec + f * 960, 960, 0) != 960)
+                            dbg("opus: decode failed at frame %d", f);
+                    }
+                    t2 = gettime();
+                    te += t1 - t0;
+                    td += t2 - t1;
+                    if (t1 - t0 > worst_e)
+                        worst_e = t1 - t0;
+                    if (t2 - t1 > worst_d)
+                        worst_d = t2 - t1;
+                }
+                n = frames * 960;
+                printf("\x1b[12;1HOpus: encode %.2f ms/frame (worst %.2f), decode %.2f ms/frame,"
+                       " %ld bytes\n", ticks_to_microsecs(te) / 1000.0 / frames,
+                       ticks_to_microsecs(worst_e) / 1000.0, ticks_to_microsecs(td) / 1000.0 / frames,
+                       bytes);
+                dbg("opus: %d frames, encode avg %u us (worst %u), decode avg %u us (worst %u),"
+                    " %ld bytes (%ld bps)", frames,
+                    (unsigned)(ticks_to_microsecs(te) / frames), (unsigned)ticks_to_microsecs(worst_e),
+                    (unsigned)(ticks_to_microsecs(td) / frames), (unsigned)ticks_to_microsecs(worst_d),
+                    bytes, bytes * 8 * 50 / frames);
             }
             printf("\x1b[10;1HRecorded %.1f s, peak level %d of 32767.   \n",
                    (double)n / UA_RATE, peak);

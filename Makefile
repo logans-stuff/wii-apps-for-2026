@@ -3,7 +3,7 @@ include wolfssl.mk
 include $(DEVKITPPC)/base_tools
 
 MACHDEP := -DGEKKO -mrvl -mcpu=750 -meabi -mhard-float
-CFLAGS  := -O2 -Wall $(MACHDEP) $(WOLF_CFLAGS) -I$(DEVKITPRO)/libogc/include -I$(DEVKITPRO)/portlibs/ppc/include -Ithird_party/qrcodegen/c
+CFLAGS  := -O2 -Wall $(MACHDEP) $(WOLF_CFLAGS) -I$(DEVKITPRO)/libogc/include -I$(DEVKITPRO)/portlibs/ppc/include -I$(DEVKITPRO)/portlibs/ppc/include/opus -Ithird_party/qrcodegen/c
 LDFLAGS := $(MACHDEP) -Wl,-Map,build/sonoran.map -L$(DEVKITPRO)/libogc/lib/wii -L$(DEVKITPRO)/portlibs/ppc/lib
 LIBS    := -lpng16 -lz -lfat -lwiiuse -lbte -logc -lm
 
@@ -26,7 +26,7 @@ build/probe.dol: build/probe.elf
 HEADSET_OBJ := build/obj/source/headset.o build/obj/source/usbaudio.o build/obj/source/ogc_usb.o build/obj/source/net_wii.o \
   $(filter build/obj/third_party/wolfssl/%,$(OBJ))
 build/headset.elf: $(HEADSET_OBJ)
-	$(CC) $(LDFLAGS) -o $@ $(HEADSET_OBJ) $(LIBS)
+	$(CC) $(LDFLAGS) -o $@ $(HEADSET_OBJ) -lopus $(LIBS)
 build/headset.dol: build/headset.elf
 	elf2dol $< $@
 

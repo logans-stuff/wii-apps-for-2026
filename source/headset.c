@@ -32,9 +32,14 @@ static void video_start(void)
     VIDEO_WaitVSync();
 }
 
+static int a_held(void)
+{
+    WPAD_ScanPads();
+    return (WPAD_ButtonsHeld(0) & WPAD_BUTTON_A) != 0;
+}
+
 int main(void)
 {
-    static int16_t chunk[48 * 32];
     int16_t *rec = malloc(MAX_SAMPLES * sizeof(int16_t));
     char info[200] = "", err[200] = "";
 
@@ -65,25 +70,23 @@ int main(void)
         if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME)
             break;
         if (held & WPAD_BUTTON_A) {
-            int n = 0, peak = 0, i;
+            int n, peak = 0, i;
             printf("\x1b[10;1HRecording...                          ");
-            while (n + 48 * 32 <= MAX_SAMPLES) {
-                int got = ua_record(chunk, 48 * 32);
-                if (got < 0) {
-                    printf("\x1b[11;1Hrecord error %d\n", got);
-                    dbg("headset: record error %d", got);
-                    break;
-                }
-                memcpy(rec + n, chunk, (size_t)got * sizeof(int16_t));
-                for (i = 0; i < got; i++) {
-                    int v = abs(chunk[i]);
-                    if (v > peak)
-                        peak = v;
-                }
-                n += got;
-                WPAD_ScanPads();
-                if (!(WPAD_ButtonsHeld(0) & WPAD_BUTTON_A))
-                    break;
+            {
+                unsigned long long t0 = net_ms();
+                n = ua_record(rec, MAX_SAMPLES, a_held);
+                dbg("headset: recorded %d samples (%.1f s of sound) in %llu ms", n,
+                    (double)n / UA_RATE, net_ms() - t0);
+            }
+            if (n < 0) {
+                printf("\x1b[11;1Hrecord error %d\n", n);
+                dbg("headset: record error %d", n);
+                n = 0;
+            }
+            for (i = 0; i < n; i++) {
+                int v = abs(rec[i]);
+                if (v > peak)
+                    peak = v;
             }
             printf("\x1b[10;1HRecorded %.1f s, peak level %d of 32767.   \n",
                    (double)n / UA_RATE, peak);

@@ -7,6 +7,7 @@
 #include <malloc.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <gccore.h>
 #include <ogc/usb.h>
@@ -14,10 +15,7 @@
 #include "net.h"
 #include "usbaudio.h"
 
-/* Packets (ms) for each IOS call. Each call costs time, so a larger call
- * keeps the sound without gaps. ua_open tries ISO_MAX first. */
 #define ISO_MAX 32
-static int iso_packets = ISO_MAX;
 
 struct stream {
     int iface, alt, ep, maxpkt, channels, bits;
@@ -187,64 +185,126 @@ void ua_close(void)
     fd_open = mic_open = spk_open = 0;
 }
 
-int ua_record(int16_t *out, int max_samples)
-{
-    int got = 0, frame = UA_RATE / 1000;          /* 48 samples each ms */
-    int bytes = frame * (mic.bits / 8) * mic.channels;
-    static int logged;
+/* ---- streaming with a queue of async iso transfers ----
+ * IOS takes at most 8 packets (8 ms) per call, and one call takes about
+ * 16 ms. With QDEPTH calls in the queue, IOS always has the next one. */
 
-    if (!fd_open || mic.ep == 0 || bytes <= 0 || bytes > 512)
+#define QDEPTH 4
+#define QPKTS 8
+
+struct xfer {
+    u8 *buf;
+    u16 *sizes;
+    volatile int busy;
+    volatile s32 result;
+};
+
+static struct xfer q[QDEPTH];
+
+static s32 xfer_done(s32 result, void *arg)
+{
+    struct xfer *x = arg;
+
+    x->result = result;
+    x->busy = 0;
+    return 0;
+}
+
+static int queue_ready(void)
+{
+    int i;
+
+    for (i = 0; i < QDEPTH; i++) {
+        if (q[i].buf == NULL)
+            q[i].buf = memalign(32, QPKTS * 512);
+        if (q[i].sizes == NULL)
+            q[i].sizes = memalign(32, 32);
+        if (q[i].buf == NULL || q[i].sizes == NULL)
+            return -1;
+        q[i].busy = 0;
+    }
+    return 0;
+}
+
+static void wait_xfer(struct xfer *x)
+{
+    unsigned long long t0 = net_ms();
+
+    while (x->busy && net_ms() - t0 < 1000)
+        usleep(200);
+}
+
+static s32 submit_read(struct xfer *x, int bytes)
+{
+    int p;
+
+    for (p = 0; p < QPKTS; p++)
+        x->sizes[p] = (u16)bytes;
+    DCFlushRange(x->sizes, 32);
+    DCInvalidateRange(x->buf, QPKTS * 512);
+    x->busy = 1;
+    return USB_ReadIsoMsgAsync(mic_fd, (u8)mic.ep, QPKTS, x->sizes, x->buf, xfer_done, x);
+}
+
+int ua_record(int16_t *out, int max_samples, int (*keep_going)(void))
+{
+    int frame = UA_RATE / 1000, got = 0, i, k = 0;
+    int bytes = frame * (mic.bits / 8) * mic.channels;
+    int chunk = frame * QPKTS, stop = 0;
+
+    if (!fd_open || mic.ep == 0 || bytes <= 0 || bytes > 512 || queue_ready() != 0)
         return -1;
-    while (got + frame * iso_packets <= max_samples) {
-        s32 ret;
-        int p, s, off = 0;
-        unsigned long long t0 = net_ms();
-        for (p = 0; p < iso_packets; p++)
-            iso_sizes[p] = (u16)bytes;
-        DCFlushRange(iso_sizes, 2 * ISO_MAX + 32);
-        ret = USB_ReadIsoMsg(mic_fd, (u8)mic.ep, (u8)iso_packets, iso_sizes, iso_buf);
-        if (ret < 0 && iso_packets > 8) {
-            dbg("ua: iso read with %d packets = %d, trying 8", iso_packets, (int)ret);
-            iso_packets = 8;
-            continue;
-        }
-        if (ret < 0)
-            return got > 0 ? got : (int)ret;
-        DCInvalidateRange(iso_sizes, 2 * ISO_MAX + 32);
-        DCInvalidateRange(iso_buf, ISO_MAX * 512);
-        if (logged < 3) {
-            dbg("ua: iso read %d pkts = %d in %llu ms, sizes %u %u %u", iso_packets, (int)ret,
-                net_ms() - t0, iso_sizes[0], iso_sizes[1], iso_sizes[2]);
-            logged++;
-        }
-        /* The data of each packet starts at the requested offset. */
-        for (p = 0; p < iso_packets; p++, off += bytes) {
-            int n = iso_sizes[p] <= bytes ? iso_sizes[p] / (2 * mic.channels) : frame;
-            const u8 *src = iso_buf + off;
-            for (s = 0; s < frame; s++) {
-                const u8 *x = src + s * 2 * mic.channels;
-                out[got++] = s < n ? (int16_t)(x[0] | (x[1] << 8)) : 0;
+    for (i = 0; i < QDEPTH; i++)
+        if (submit_read(&q[i], bytes) < 0)
+            q[i].busy = 0;
+    for (;;) {
+        struct xfer *x = &q[k];
+        int p, s;
+
+        wait_xfer(x);
+        if (x->result >= 0 && got + chunk <= max_samples && !stop) {
+            DCInvalidateRange(x->sizes, 32);
+            DCInvalidateRange(x->buf, QPKTS * 512);
+            for (p = 0; p < QPKTS; p++) {
+                const u8 *src = x->buf + p * bytes;
+                int n = x->sizes[p] <= bytes ? x->sizes[p] / (2 * mic.channels) : frame;
+                for (s = 0; s < frame; s++) {
+                    const u8 *v = src + s * 2 * mic.channels;
+                    out[got++] = s < n ? (int16_t)(v[0] | (v[1] << 8)) : 0;
+                }
             }
         }
+        if (got + chunk > max_samples || (keep_going && !keep_going()))
+            stop = 1;
+        if (!stop && submit_read(x, bytes) < 0)
+            stop = 1;
+        if (stop) {
+            /* let the others finish, then return */
+            for (i = 0; i < QDEPTH; i++)
+                wait_xfer(&q[i]);
+            return got;
+        }
+        k = (k + 1) % QDEPTH;
     }
-    return got;
 }
 
 int ua_play(const int16_t *in, int samples)
 {
-    int frame = UA_RATE / 1000, done = 0;
+    int frame = UA_RATE / 1000, done = 0, k = 0, i;
     int bytes = frame * (spk.bits / 8) * spk.channels;
-    static int logged;
+    int chunk = frame * QPKTS;
 
-    if (!fd_open || spk.ep == 0 || bytes <= 0 || bytes > 512)
+    if (!fd_open || spk.ep == 0 || bytes <= 0 || bytes > 512 || queue_ready() != 0)
         return -1;
-    while (done + frame * iso_packets <= samples) {
-        s32 ret;
+    while (done + chunk <= samples) {
+        struct xfer *x = &q[k];
+        u8 *dst;
         int p, s, c;
-        unsigned long long t0 = net_ms();
-        for (p = 0; p < iso_packets; p++) {
-            u8 *dst = iso_buf + p * bytes;
-            iso_sizes[p] = (u16)bytes;
+
+        wait_xfer(x);
+        dst = x->buf;
+        for (p = 0; p < QPKTS; p++) {
+            x->sizes[p] = (u16)bytes;
             for (s = 0; s < frame; s++) {
                 int16_t v = in[done + p * frame + s];
                 for (c = 0; c < spk.channels; c++) {
@@ -253,16 +313,17 @@ int ua_play(const int16_t *in, int samples)
                 }
             }
         }
-        DCFlushRange(iso_sizes, 2 * ISO_MAX + 32);
-        DCFlushRange(iso_buf, ISO_MAX * 512);
-        ret = USB_WriteIsoMsg(spk_fd, (u8)spk.ep, (u8)iso_packets, iso_sizes, iso_buf);
-        if (logged < 3) {
-            dbg("ua: iso write %d pkts = %d in %llu ms", iso_packets, (int)ret, net_ms() - t0);
-            logged++;
+        DCFlushRange(x->sizes, 32);
+        DCFlushRange(x->buf, QPKTS * 512);
+        x->busy = 1;
+        if (USB_WriteIsoMsgAsync(spk_fd, (u8)spk.ep, QPKTS, x->sizes, x->buf, xfer_done, x) < 0) {
+            x->busy = 0;
+            return -1;
         }
-        if (ret < 0)
-            return (int)ret;
-        done += frame * iso_packets;
+        done += chunk;
+        k = (k + 1) % QDEPTH;
     }
+    for (i = 0; i < QDEPTH; i++)
+        wait_xfer(&q[i]);
     return 0;
 }

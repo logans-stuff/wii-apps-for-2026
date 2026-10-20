@@ -1,13 +1,13 @@
-/* Sonoran LoRa node: a Meshtastic node on the Wii over the CH341 + SX1262
- * Meshtoad. Listens, decodes, keeps a NodeDB of everyone it hears, and can
- * transmit. Controls:
- *   D-Pad up/down = scroll/select   1 = toggle Nodes / Messages
- *   A = type a message   2 = quick chat   B = announce this node   Home = exit */
+/* Meshtoad: a Meshtastic node on the Wii (SX1262 over a CH341 USB bridge),
+ * with a GRRLIB graphical UI. Listens, decodes, keeps a NodeDB, transmits.
+ * Controls: D-Pad up/down scroll/select, 1 = Nodes/Messages, A = type a
+ * message, 2 = quick chat, B = announce, Home = exit. */
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 
-#include <gccore.h>
+#include <grrlib.h>
 #include <ogc/lwp_watchdog.h>
 #include <wiiuse/wpad.h>
 
@@ -15,79 +15,60 @@
 #include "sx1262.h"
 #include "meshtastic.h"
 #include "nodedb.h"
-#include "osk.h"
 #include "config.h"
+#include "font_dejavu.h"
 
-/* Loaded from sd:/apps/meshtoad/config.txt, else sensible defaults. */
+#define NODEDB_PATH "sd:/apps/meshtoad/nodedb.dat"
+
 static struct mesh_config CFG;
+static GRRLIB_ttfFont *FONT;
+
+/* Palette (RGBA8). */
+#define C_BG     0x0E1522FF
+#define C_BAR    0x1B2B49FF
+#define C_SEL    0x2E5A94FF
+#define C_ROW    0x14203AFF
+#define C_TEXT   0xE6ECF5FF
+#define C_DIM    0x8FA2C0FF
+#define C_ACC    0x6CC0FFFF
+#define C_GOOD   0x7FE08BFF
+#define C_WARN   0xF0C05AFF
 
 enum { VIEW_NODES, VIEW_MESSAGES };
 
-#define NODEDB_PATH "sd:/apps/meshtoad/nodedb.dat"
-#define BODY_TOP 9
-#define VIEW_ROWS 12
+#define SCR_W 640
+#define SCR_H 480
+#define LIST_TOP 54
+#define ROW_H 21
+#define VIEW_ROWS 17
 #define MSG_MAX 64
 
-static void *xfb;
+static char msgs[MSG_MAX][96];
+static int msg_count, msg_top, node_sel;
 
-static char msgs[MSG_MAX][72];
-static int msg_count;
-static int msg_top;     /* first visible message in Messages view */
-static int node_sel;    /* selected node in Nodes view */
-
-static void video_start(void)
+static void text(int x, int y, int size, u32 col, const char *fmt, ...)
 {
-    GXRModeObj *rmode;
-
-    VIDEO_Init();
-    rmode = VIDEO_GetPreferredMode(NULL);
-    xfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
-    console_init(xfb, 20, 20, rmode->fbWidth, rmode->xfbHeight,
-                 rmode->fbWidth * VI_DISPLAY_PIX_SZ);
-    VIDEO_Configure(rmode);
-    VIDEO_SetNextFramebuffer(xfb);
-    VIDEO_SetBlack(false);
-    VIDEO_Flush();
-    VIDEO_WaitVSync();
+    char s[160];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s, sizeof(s), fmt, ap);
+    va_end(ap);
+    GRRLIB_PrintfTTF(x, y, FONT, s, size, col);
 }
 
 static void log_add(const char *s)
 {
     int following = msg_top >= msg_count - VIEW_ROWS;
-    if (msg_count < MSG_MAX) {
-        snprintf(msgs[msg_count++], 72, "%s", s);
-    } else {
+    if (msg_count < MSG_MAX)
+        snprintf(msgs[msg_count++], sizeof(msgs[0]), "%s", s);
+    else {
         int i;
         for (i = 1; i < MSG_MAX; i++)
-            memcpy(msgs[i - 1], msgs[i], 72);
-        snprintf(msgs[MSG_MAX - 1], 72, "%s", s);
+            memcpy(msgs[i - 1], msgs[i], sizeof(msgs[0]));
+        snprintf(msgs[MSG_MAX - 1], sizeof(msgs[0]), "%s", s);
     }
-    if (following) /* keep the newest in view */
+    if (following)
         msg_top = msg_count > VIEW_ROWS ? msg_count - VIEW_ROWS : 0;
-}
-
-static void clear_body(void)
-{
-    int r;
-    for (r = BODY_TOP - 1; r < BODY_TOP + VIEW_ROWS; r++)
-        printf("\x1b[%d;1H%-71s", r, "");
-}
-
-static void render_messages(void)
-{
-    int i, maxtop = msg_count > VIEW_ROWS ? msg_count - VIEW_ROWS : 0;
-    int last;
-    if (msg_top > maxtop)
-        msg_top = maxtop;
-    if (msg_top < 0)
-        msg_top = 0;
-    last = msg_top + VIEW_ROWS < msg_count ? msg_top + VIEW_ROWS : msg_count;
-    printf("\x1b[%d;1HMessages %d-%d/%d   up/down scroll   1=nodes          \n",
-           BODY_TOP - 1, msg_count ? msg_top + 1 : 0, last, msg_count);
-    for (i = 0; i < VIEW_ROWS; i++) {
-        int idx = msg_top + i;
-        printf("\x1b[%d;1H%-71.71s", BODY_TOP + i, idx < msg_count ? msgs[idx] : "");
-    }
 }
 
 static void fmt_age(unsigned s, char *out, int n)
@@ -100,26 +81,84 @@ static void fmt_age(unsigned s, char *out, int n)
         snprintf(out, n, "%uh", s / 3600);
 }
 
-static void node_row(const struct node *nd, unsigned long long now, char *out, int n)
+/* ---- graphical on-screen keyboard ---- */
+static const char *const KB[] = {
+    "1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm ,.", "!?@#$%&*-_",
+};
+#define KB_ROWS 5
+
+static int gfx_osk(const char *title, char *buf, int buflen)
 {
-    char nm[8], age[12], hop[16], pos[36] = "", batt[16] = "";
-    snprintf(nm, sizeof(nm), "%-4.4s", nd->has_name ? nd->short_name : "----");
-    fmt_age((unsigned)(now - nd->last_heard), age, sizeof(age));
-    if (nd->hops >= 0)
-        snprintf(hop, sizeof(hop), "%dh", nd->hops);
-    else
-        snprintf(hop, sizeof(hop), "?");
-    if (nd->has_pos)
-        snprintf(pos, sizeof(pos), " %.4f,%.4f", nd->lat, nd->lon);
-    if (nd->has_batt)
-        snprintf(batt, sizeof(batt), " %d%%", nd->battery);
-    snprintf(out, n, "%s !%08x %-3s %5.1fdB %-4s%s%s",
-             nm, nd->id, hop, nd->snr, age, pos, batt);
+    int r = 1, c = 0;
+    for (;;) {
+        u32 d;
+        int row, i;
+        WPAD_ScanPads();
+        d = WPAD_ButtonsDown(0);
+        if (d)
+            entropy_add(d);
+        if (d & WPAD_BUTTON_HOME)
+            return 0;
+        if (d & WPAD_BUTTON_PLUS)
+            return 1;
+        if (d & WPAD_BUTTON_B) {
+            int l = strlen(buf);
+            if (l > 0)
+                buf[l - 1] = '\0';
+        }
+        if (d & WPAD_BUTTON_UP)
+            r = (r + KB_ROWS - 1) % KB_ROWS;
+        if (d & WPAD_BUTTON_DOWN)
+            r = (r + 1) % KB_ROWS;
+        if (d & WPAD_BUTTON_LEFT)
+            c = (c + (int)strlen(KB[r]) - 1) % (int)strlen(KB[r]);
+        if (d & WPAD_BUTTON_RIGHT)
+            c = (c + 1) % (int)strlen(KB[r]);
+        if (c >= (int)strlen(KB[r]))
+            c = strlen(KB[r]) - 1;
+        if (d & WPAD_BUTTON_A) {
+            int l = strlen(buf);
+            if (l + 1 < buflen) {
+                buf[l] = KB[r][c];
+                buf[l + 1] = '\0';
+            }
+        }
+
+        GRRLIB_FillScreen(C_BG);
+        GRRLIB_Rectangle(0, 0, SCR_W, 44, C_BAR, 1);
+        text(16, 10, 24, C_TEXT, "%s", title);
+        GRRLIB_Rectangle(24, 70, SCR_W - 48, 40, C_ROW, 1);
+        text(34, 78, 24, C_ACC, "%s_", buf);
+        for (row = 0; row < KB_ROWS; row++) {
+            int len = strlen(KB[row]);
+            for (i = 0; i < len; i++) {
+                int kx = 40 + i * 52, ky = 150 + row * 52;
+                u32 bg = (row == r && i == c) ? C_SEL : C_ROW;
+                char ch[2] = { KB[row][i], 0 };
+                GRRLIB_Rectangle(kx, ky, 46, 46, bg, 1);
+                text(kx + (ch[0] == ' ' ? 10 : 16), ky + 8, 26, C_TEXT,
+                     ch[0] == ' ' ? "sp" : ch);
+            }
+        }
+        text(24, 430, 20, C_DIM,
+             "D-Pad move   A type   B delete   + send   Home cancel");
+        GRRLIB_Render();
+    }
 }
 
-static void render_nodes(void)
+/* ---- main views ---- */
+static void draw_header(const char *radio, long rx, long tx, long crc)
 {
-    int i, count = nodedb_count(), top, maxtop;
+    GRRLIB_Rectangle(0, 0, SCR_W, 46, C_BAR, 1);
+    text(14, 8, 26, C_TEXT, "Meshtoad");
+    text(180, 12, 20, C_ACC, "!%08x  \"%s\"", CFG.node_id, CFG.long_name);
+    text(14, 30, 15, C_DIM, "%s   hop %d  %ddBm   rx %ld tx %ld crc %ld",
+         radio, CFG.hop_limit, CFG.tx_power, rx, tx, crc);
+}
+
+static void draw_nodes(void)
+{
+    int count = nodedb_count(), top, maxtop, i;
     unsigned long long now = (unsigned long long)time(NULL);
 
     if (node_sel >= count)
@@ -133,33 +172,59 @@ static void render_nodes(void)
     if (top < 0)
         top = 0;
 
-    printf("\x1b[%d;1HNodes %d/%d   up/down select   1=messages              \n",
-           BODY_TOP - 1, count ? node_sel + 1 : 0, count);
+    text(SCR_W - 150, 30, 15, C_DIM, "Nodes %d/%d", count ? node_sel + 1 : 0, count);
     for (i = 0; i < VIEW_ROWS; i++) {
-        int idx = top + i;
+        int idx = top + i, y = LIST_TOP + i * ROW_H;
         const struct node *nd = idx < count ? nodedb_get(idx) : NULL;
-        char line[80] = "";
-        if (nd != NULL)
-            node_row(nd, now, line, sizeof(line));
-        if (nd != NULL && idx == node_sel)
-            printf("\x1b[%d;1H\x1b[7m%-71.71s\x1b[0m", BODY_TOP + i, line);
-        else
-            printf("\x1b[%d;1H%-71.71s", BODY_TOP + i, line);
+        char age[12];
+        if (nd == NULL)
+            continue;
+        if (idx == node_sel)
+            GRRLIB_Rectangle(6, y - 1, SCR_W - 12, ROW_H, C_SEL, 1);
+        fmt_age((unsigned)(now - nd->last_heard), age, sizeof(age));
+        text(14, y + 2, 17, nd->has_name ? C_TEXT : C_DIM, "%-4.4s",
+             nd->has_name ? nd->short_name : "----");
+        text(70, y + 2, 17, C_DIM, "!%08x", nd->id);
+        text(210, y + 2, 17, nd->hops == 0 ? C_GOOD : C_TEXT,
+             nd->hops >= 0 ? "%dh" : "?h", nd->hops);
+        text(252, y + 2, 17, C_TEXT, "%5.1fdB", nd->snr);
+        text(345, y + 2, 17, C_DIM, "%s", age);
+        if (nd->has_pos)
+            text(405, y + 2, 17, C_ACC, "%.4f,%.4f", nd->lat, nd->lon);
+        if (nd->has_batt)
+            text(575, y + 2, 17, C_GOOD, "%d%%", nd->battery);
     }
 }
 
-static void redraw_all(const char *info, int view, long rx, long crc, long tx)
+static void draw_messages(void)
 {
-    printf("\x1b[2J");
-    printf("\x1b[2;1HSonoran LoRa node  (!%08x \"%s\")\n", CFG.node_id, CFG.long_name);
-    printf("\x1b[3;1HRadio: %.46s  hop %d  %ddBm\n", info, CFG.hop_limit, CFG.tx_power);
-    printf("\x1b[4;1H%u Hz SF%d BW%d ch %02x  up/down scroll 1=view A=type 2=quick B=ann Home=exit\n",
-           CFG.lora.freq_hz, CFG.lora.sf, CFG.lora.bw_khz, CFG.channel_hash);
-    printf("\x1b[8;1Hrx %ld  crc %ld  tx %ld\n", rx, crc, tx);
+    int maxtop = msg_count > VIEW_ROWS ? msg_count - VIEW_ROWS : 0, i;
+    if (msg_top > maxtop)
+        msg_top = maxtop;
+    if (msg_top < 0)
+        msg_top = 0;
+    text(SCR_W - 180, 30, 15, C_DIM, "Messages %d-%d/%d",
+         msg_count ? msg_top + 1 : 0,
+         msg_top + VIEW_ROWS < msg_count ? msg_top + VIEW_ROWS : msg_count, msg_count);
+    for (i = 0; i < VIEW_ROWS; i++) {
+        int idx = msg_top + i, y = LIST_TOP + i * ROW_H;
+        if (idx < msg_count)
+            text(14, y + 2, 17, C_TEXT, "%s", msgs[idx]);
+    }
+}
+
+static void draw_ui(const char *radio, int view, long rx, long tx, long crc)
+{
+    GRRLIB_FillScreen(C_BG);
+    draw_header(radio, rx, tx, crc);
     if (view == VIEW_NODES)
-        render_nodes();
+        draw_nodes();
     else
-        render_messages();
+        draw_messages();
+    GRRLIB_Rectangle(0, SCR_H - 26, SCR_W, 26, C_BAR, 1);
+    text(10, SCR_H - 22, 16, C_DIM,
+         "up/down scroll   1 view   A type   2 quick   B announce   Home exit");
+    GRRLIB_Render();
 }
 
 static uint32_t next_id(void)
@@ -172,85 +237,80 @@ static uint32_t next_id(void)
 static void send_text(const char *msg)
 {
     uint8_t frame[256];
-    char line[72];
-    int flen = mesh_encode_text(CFG.node_id, 0xffffffffu, next_id(), CFG.channel_hash, msg,
-                                frame, sizeof(frame));
+    char line[96];
+    int flen = mesh_encode_text(CFG.node_id, 0xffffffffu, next_id(), CFG.channel_hash,
+                                msg, frame, sizeof(frame));
     int rc = flen > 0 ? sx_send(frame, flen) : -1;
-    snprintf(line, sizeof(line), "TX text \"%s\" %s", msg, rc == 0 ? "sent" : "FAILED");
+    snprintf(line, sizeof(line), "> you: %.70s  [%s]", msg, rc == 0 ? "sent" : "FAIL");
     log_add(line);
-    dbg("lora: TX text '%s' rc=%d len=%d", msg, rc, flen);
+    dbg("lora: TX text '%s' rc=%d", msg, rc);
 }
 
 static void send_nodeinfo(void)
 {
     uint8_t frame[256];
-    char line[72];
-    int flen = mesh_encode_nodeinfo(CFG.node_id, next_id(), CFG.channel_hash, CFG.long_name,
-                                    CFG.short_name, frame, sizeof(frame));
+    int flen = mesh_encode_nodeinfo(CFG.node_id, next_id(), CFG.channel_hash,
+                                    CFG.long_name, CFG.short_name, frame, sizeof(frame));
     int rc = flen > 0 ? sx_send(frame, flen) : -1;
-    snprintf(line, sizeof(line), "TX nodeinfo \"%s\" %s", CFG.long_name, rc == 0 ? "sent" : "FAILED");
+    char line[96];
+    snprintf(line, sizeof(line), "> announced \"%s\"  [%s]", CFG.long_name,
+             rc == 0 ? "sent" : "FAIL");
     log_add(line);
-    dbg("lora: TX nodeinfo rc=%d len=%d", rc, flen);
+    dbg("lora: TX nodeinfo rc=%d", rc);
 }
 
-static int wait_home(void)
+static void fatal(const char *msg)
 {
     for (;;) {
         WPAD_ScanPads();
-        if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME) {
-            net_stop();
-            return 0;
-        }
-        VIDEO_WaitVSync();
+        if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME)
+            break;
+        GRRLIB_FillScreen(C_BG);
+        draw_header("", 0, 0, 0);
+        text(20, 120, 22, C_WARN, "%s", msg);
+        text(20, 160, 18, C_DIM, "Push Home to exit.");
+        GRRLIB_Render();
     }
+    net_stop();
+    GRRLIB_FreeTTF(FONT);
+    GRRLIB_Exit();
 }
 
 int main(void)
 {
     char info[200] = "", err[200] = "";
-    long packets = 0, crc_errors = 0, sent = 0, polls = 0;
-    int view = VIEW_NODES, dirty = 0;
-    unsigned long long last_save = (unsigned long long)time(NULL);
+    long packets = 0, crc_errors = 0, sent = 0, dirty = 0;
+    unsigned long long last_save;
+    int view = VIEW_NODES;
 
-    video_start();
+    GRRLIB_Init();
     WPAD_Init();
+    FONT = GRRLIB_LoadTTF(dejavu_ttf, dejavu_ttf_len);
     nodedb_reset();
-    config_load(&CFG);               /* sd:/apps/meshtoad/config.txt, else defaults */
+    config_load(&CFG);
     mesh_set_key(CFG.key, CFG.keylen);
     mesh_set_hop_limit(CFG.hop_limit);
     mesh_set_hw_model(CFG.hw_model);
     sx_set_tx_power(CFG.tx_power);
-    dbg("lora: nodedb load rc=%d, %d nodes restored",
-        nodedb_load(NODEDB_PATH), nodedb_count());
-    printf("\x1b[2;1HSonoran LoRa node  (!%08x \"%s\", %s)\n",
-           CFG.node_id, CFG.long_name, CFG.source);
-    /* Networking exists only for the remote debug log, and using Wi-Fi upsets
-     * the Homebrew Channel's own connection. So skip it entirely unless this
-     * build has a real DEBUG_HOST (set via local.mk); the public default is
-     * loopback, meaning logging off and Wi-Fi untouched. */
-    if (strcmp(DEBUG_HOST, "127.0.0.1") != 0 && net_start(err, sizeof(err)) != 0)
-        printf("network: %s (no log)\n", err);
-    dbg("lora: start");
+    nodedb_load(NODEDB_PATH);
+    last_save = (unsigned long long)time(NULL);
+
+    if (strcmp(DEBUG_HOST, "127.0.0.1") != 0)
+        net_start(err, sizeof(err));
+    dbg("lora: start (%s)", CFG.source);
 
     if (sx_open(info, sizeof(info), err, sizeof(err)) != 0) {
-        printf("Radio: %s\n\nPush Home to exit.\n", err);
-        dbg("lora: open failed: %s", err);
-        return wait_home();
+        fatal(err);
+        return 0;
     }
-    printf("Radio: %s\n", info);
-    dbg("lora: %s", info);
-
     if (sx_start_rx(&CFG.lora) != 0) {
-        printf("Receive start failed.\n\nPush Home to exit.\n");
-        dbg("lora: start_rx failed");
         sx_close();
-        return wait_home();
+        fatal("Receive start failed.");
+        return 0;
     }
-    dbg("lora: listening %u Hz sf%d bw%d ch=%02x", CFG.lora.freq_hz,
-        CFG.lora.sf, CFG.lora.bw_khz, CFG.channel_hash);
-
-    send_nodeinfo(); /* announce so the Wii shows up on the mesh */
-    redraw_all(info, view, packets, crc_errors, sent);
+    dbg("lora: listening %u Hz sf%d ch=%02x", CFG.lora.freq_hz, CFG.lora.sf,
+        CFG.channel_hash);
+    send_nodeinfo();
 
     for (;;) {
         uint8_t buf[256];
@@ -262,104 +322,73 @@ int main(void)
         down = WPAD_ButtonsDown(0);
         if (down & WPAD_BUTTON_HOME)
             break;
-        if (down & (WPAD_BUTTON_UP | WPAD_BUTTON_DOWN)) {
-            int dir = (down & WPAD_BUTTON_UP) ? -1 : 1;
+        if (down & WPAD_BUTTON_UP) {
             if (view == VIEW_NODES)
-                node_sel += dir;
+                node_sel--;
             else
-                msg_top += dir;
-            if (view == VIEW_NODES)
-                render_nodes();
-            else
-                render_messages();
+                msg_top--;
         }
-        if (down & WPAD_BUTTON_1) {
+        if (down & WPAD_BUTTON_DOWN) {
+            if (view == VIEW_NODES)
+                node_sel++;
+            else
+                msg_top++;
+        }
+        if (down & WPAD_BUTTON_1)
             view = view == VIEW_NODES ? VIEW_MESSAGES : VIEW_NODES;
-            clear_body();
-            if (view == VIEW_NODES)
-                render_nodes();
-            else
-                render_messages();
-        }
         if (down & WPAD_BUTTON_A) {
             char msg[120] = "";
-            if (osk_input("Type a message for the mesh:", msg, sizeof(msg), 0) && msg[0]) {
+            if (gfx_osk("Type a message:", msg, sizeof(msg)) && msg[0]) {
                 send_text(msg);
                 sent++;
             }
-            redraw_all(info, view, packets, crc_errors, sent);
         }
         if (down & WPAD_BUTTON_2) {
-            static const char *const quick[] = {
-                "On my way", "Ack", "Hello from a Wii", "Testing"
-            };
+            static const char *const quick[] = { "On my way", "Ack",
+                                                 "Hello from a Wii", "Testing" };
             static int qi;
             send_text(quick[qi++ & 3]);
             sent++;
-            if (view == VIEW_MESSAGES)
-                render_messages();
         }
-        if (down & WPAD_BUTTON_B) {
+        if (down & WPAD_BUTTON_B)
             send_nodeinfo();
-            if (view == VIEW_MESSAGES)
-                render_messages();
-        }
-
-        if (++polls % 60 == 0) {
-            printf("\x1b[8;1Hrx %ld  crc %ld  tx %ld             \n",
-                   packets, crc_errors, sent);
-            if (view == VIEW_NODES)
-                render_nodes(); /* refresh ages ~1x/s */
-        }
-
-        /* Persist the NodeDB every minute so it survives a relaunch. */
-        if (dirty && (unsigned long long)time(NULL) - last_save >= 60) {
-            nodedb_save(NODEDB_PATH);
-            last_save = (unsigned long long)time(NULL);
-            dirty = 0;
-        }
 
         n = sx_poll(buf, sizeof(buf), &rssi, &snr);
         if (n < 0) {
             crc_errors++;
         } else if (n > 0) {
             struct mesh_pkt pkt;
-            char derr[80], line[72];
+            char derr[80], line[96];
             packets++;
             if (mesh_decode(buf, n, &pkt, derr, sizeof(derr)) == 0) {
                 nodedb_update(&pkt, rssi, snr, (unsigned long long)time(NULL));
                 dirty = 1;
-                if (pkt.portnum == MESH_PORT_TEXT) {
-                    snprintf(line, sizeof(line), "<%08x> %.55s", pkt.from, pkt.text);
-                    dbg("lora: rx text from=%08x '%s'", pkt.from, pkt.text);
-                } else if (pkt.portnum == MESH_PORT_NODEINFO) {
-                    snprintf(line, sizeof(line), "[node %08x] %.30s (%.6s)",
-                             pkt.from, pkt.long_name, pkt.short_name);
-                    dbg("lora: rx nodeinfo from=%08x '%s'", pkt.from, pkt.long_name);
-                } else {
-                    snprintf(line, sizeof(line), "(%08x port %u, %d B)",
-                             pkt.from, pkt.portnum, pkt.payload_len);
-                    dbg("lora: rx from=%08x port=%u len=%d", pkt.from, pkt.portnum,
-                        pkt.payload_len);
-                }
-                log_add(line);
-                if (view == VIEW_NODES)
-                    render_nodes();
+                if (pkt.portnum == MESH_PORT_TEXT)
+                    snprintf(line, sizeof(line), "%08x: %.70s", pkt.from, pkt.text);
+                else if (pkt.portnum == MESH_PORT_NODEINFO)
+                    snprintf(line, sizeof(line), "* %.30s (%.6s) joined", pkt.long_name,
+                             pkt.short_name);
                 else
-                    render_messages();
-            } else {
-                dbg("lora: mesh decode: %s", derr);
+                    snprintf(line, sizeof(line), "%08x port %u (%d B)", pkt.from,
+                             pkt.portnum, pkt.payload_len);
+                log_add(line);
             }
         }
-        VIDEO_WaitVSync();
+
+        if (dirty && (unsigned long long)time(NULL) - last_save >= 60) {
+            nodedb_save(NODEDB_PATH);
+            last_save = (unsigned long long)time(NULL);
+            dirty = 0;
+        }
+
+        draw_ui(info, view, packets, sent, crc_errors);
     }
 
     sx_close();
-    {
-        int rc = nodedb_save(NODEDB_PATH); /* keep what we heard for next time */
-        dbg("lora: exit (rx %ld, crc %ld, tx %ld) nodedb save rc=%d, %d nodes",
-            packets, crc_errors, sent, rc, nodedb_count());
-    }
+    nodedb_save(NODEDB_PATH);
+    dbg("lora: exit (rx %ld tx %ld, %d nodes)", packets, sent, nodedb_count());
     net_stop();
+    GRRLIB_FreeTTF(FONT);
+    GRRLIB_Exit();
     return 0;
 }

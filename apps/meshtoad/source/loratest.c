@@ -50,9 +50,19 @@ static void text(int x, int y, int size, u32 col, const char *fmt, ...)
 {
     char s[160];
     va_list ap;
+    unsigned char *p;
+
+    if (FONT == NULL)
+        return;
     va_start(ap, fmt);
     vsnprintf(s, sizeof(s), fmt, ap);
     va_end(ap);
+    /* GRRLIB's TTF renderer decodes UTF-8 and faults on multibyte / malformed
+     * bytes (e.g. emoji in a received node name). Force plain printable ASCII
+     * so every glyph is a valid single byte. */
+    for (p = (unsigned char *)s; *p; p++)
+        if (*p < 0x20 || *p > 0x7e)
+            *p = '?';
     GRRLIB_PrintfTTF(x, y, FONT, s, size, col);
 }
 
@@ -147,13 +157,24 @@ static int gfx_osk(const char *title, char *buf, int buflen)
 }
 
 /* ---- main views ---- */
-static void draw_header(const char *radio, long rx, long tx, long crc)
+static void draw_header(int view, long rx, long tx, long crc)
 {
-    GRRLIB_Rectangle(0, 0, SCR_W, 46, C_BAR, 1);
-    text(14, 8, 26, C_TEXT, "Meshtoad");
-    text(180, 12, 20, C_ACC, "!%08x  \"%s\"", CFG.node_id, CFG.long_name);
-    text(14, 30, 15, C_DIM, "%s   hop %d  %ddBm   rx %ld tx %ld crc %ld",
-         radio, CFG.hop_limit, CFG.tx_power, rx, tx, crc);
+    char cnt[40];
+    int w;
+
+    GRRLIB_Rectangle(0, 0, SCR_W, 50, C_BAR, 1);
+    text(12, 3, 22, C_TEXT, "Meshtoad");
+    text(168, 7, 16, C_ACC, "!%08x  %s", CFG.node_id, CFG.long_name);
+    text(12, 30, 13, C_DIM, "SF%d BW%d ch%02x   hop %d  %ddBm   rx %ld tx %ld crc %ld",
+         CFG.lora.sf, CFG.lora.bw_khz, CFG.channel_hash, CFG.hop_limit, CFG.tx_power,
+         rx, tx, crc);
+    if (view == VIEW_NODES)
+        snprintf(cnt, sizeof(cnt), "Nodes %d/%d",
+                 nodedb_count() ? node_sel + 1 : 0, nodedb_count());
+    else
+        snprintf(cnt, sizeof(cnt), "Messages %d", msg_count);
+    w = FONT ? GRRLIB_WidthTTF(FONT, cnt, 15) : 0;
+    text(SCR_W - w - 12, 8, 15, C_DIM, "%s", cnt);
 }
 
 static void draw_nodes(void)
@@ -172,7 +193,6 @@ static void draw_nodes(void)
     if (top < 0)
         top = 0;
 
-    text(SCR_W - 150, 30, 15, C_DIM, "Nodes %d/%d", count ? node_sel + 1 : 0, count);
     for (i = 0; i < VIEW_ROWS; i++) {
         int idx = top + i, y = LIST_TOP + i * ROW_H;
         const struct node *nd = idx < count ? nodedb_get(idx) : NULL;
@@ -203,9 +223,6 @@ static void draw_messages(void)
         msg_top = maxtop;
     if (msg_top < 0)
         msg_top = 0;
-    text(SCR_W - 180, 30, 15, C_DIM, "Messages %d-%d/%d",
-         msg_count ? msg_top + 1 : 0,
-         msg_top + VIEW_ROWS < msg_count ? msg_top + VIEW_ROWS : msg_count, msg_count);
     for (i = 0; i < VIEW_ROWS; i++) {
         int idx = msg_top + i, y = LIST_TOP + i * ROW_H;
         if (idx < msg_count)
@@ -213,10 +230,10 @@ static void draw_messages(void)
     }
 }
 
-static void draw_ui(const char *radio, int view, long rx, long tx, long crc)
+static void draw_ui(int view, long rx, long tx, long crc)
 {
     GRRLIB_FillScreen(C_BG);
-    draw_header(radio, rx, tx, crc);
+    draw_header(view, rx, tx, crc);
     if (view == VIEW_NODES)
         draw_nodes();
     else
@@ -224,6 +241,17 @@ static void draw_ui(const char *radio, int view, long rx, long tx, long crc)
     GRRLIB_Rectangle(0, SCR_H - 26, SCR_W, 26, C_BAR, 1);
     text(10, SCR_H - 22, 16, C_DIM,
          "up/down scroll   1 view   A type   2 quick   B announce   Home exit");
+    GRRLIB_Render();
+}
+
+/* A splash during startup so the screen is never a blank black wait, and so a
+ * hang shows the last stage reached. */
+static void loading(const char *msg)
+{
+    GRRLIB_FillScreen(C_BG);
+    GRRLIB_Rectangle(0, 0, SCR_W, 46, C_BAR, 1);
+    text(14, 8, 26, C_TEXT, "Meshtoad");
+    text(40, 210, 24, C_ACC, "%s", msg);
     GRRLIB_Render();
 }
 
@@ -266,7 +294,7 @@ static void fatal(const char *msg)
         if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME)
             break;
         GRRLIB_FillScreen(C_BG);
-        draw_header("", 0, 0, 0);
+        draw_header(VIEW_NODES, 0, 0, 0);
         text(20, 120, 22, C_WARN, "%s", msg);
         text(20, 160, 18, C_DIM, "Push Home to exit.");
         GRRLIB_Render();
@@ -286,7 +314,9 @@ int main(void)
     GRRLIB_Init();
     WPAD_Init();
     FONT = GRRLIB_LoadTTF(dejavu_ttf, dejavu_ttf_len);
+    loading("Starting...");
     nodedb_reset();
+    loading("Reading config + NodeDB from SD...");
     config_load(&CFG);
     mesh_set_key(CFG.key, CFG.keylen);
     mesh_set_hop_limit(CFG.hop_limit);
@@ -299,10 +329,12 @@ int main(void)
         net_start(err, sizeof(err));
     dbg("lora: start (%s)", CFG.source);
 
+    loading("Detecting the Meshtoad radio over USB...");
     if (sx_open(info, sizeof(info), err, sizeof(err)) != 0) {
         fatal(err);
         return 0;
     }
+    loading("Starting receive...");
     if (sx_start_rx(&CFG.lora) != 0) {
         sx_close();
         fatal("Receive start failed.");
@@ -381,7 +413,7 @@ int main(void)
             dirty = 0;
         }
 
-        draw_ui(info, view, packets, sent, crc_errors);
+        draw_ui(view, packets, sent, crc_errors);
     }
 
     sx_close();

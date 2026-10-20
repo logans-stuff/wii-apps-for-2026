@@ -14,3 +14,4 @@ driver/*.zip
 driver/wii-usb-headset/headset.dol
 driver/wii-usb-headset/apps/
 local.mk
+dist/apps/meshtoad/boot.dol

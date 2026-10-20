@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<app version="1">
+  <name>Meshtoad</name>
+  <coder>Logan</coder>
+  <version>0.1</version>
+  <release_date>20261020</release_date>
+  <short_description>Meshtastic node over a USB Meshtoad</short_description>
+  <long_description>A two-way Meshtastic node: SX1262 LoRa over a CH341 USB-SPI bridge. Decodes the mesh, keeps a NodeDB (saved to SD), and sends messages. Settings in config.txt.</long_description>
+  <no_ios_reload/>
+</app>

@@ -34,8 +34,12 @@ int tcp_receive_once(int port, char *buf, int len, char *err, size_t errlen);
 /* The IP address of this console as text. Wii only. */
 void net_my_ip(char *out, size_t outlen);
 
-/* Debug log: one TCP line to DEBUG_HOST:4301. Never log secrets. */
+/* Debug log: one TCP line to DEBUG_HOST:4301. Never log secrets.
+ * Override the address at build time with -DDEBUG_HOST="..." (see local.mk,
+ * which is gitignored); the default is loopback so no private address ships. */
+#ifndef DEBUG_HOST
 #define DEBUG_HOST "127.0.0.1"
+#endif
 void dbg(const char *fmt, ...);
 
 /* Add a timing sample to the random seed pool. */

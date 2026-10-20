@@ -4,6 +4,8 @@ include $(DEVKITPPC)/base_tools
 
 MACHDEP := -DGEKKO -mrvl -mcpu=750 -meabi -mhard-float
 CFLAGS  := -O2 -Wall $(MACHDEP) $(WOLF_CFLAGS) -I$(DEVKITPRO)/libogc/include -I$(DEVKITPRO)/portlibs/ppc/include -I$(DEVKITPRO)/portlibs/ppc/include/opus -Ithird_party/qrcodegen/c
+# Optional, gitignored local overrides (e.g. CFLAGS += -DDEBUG_HOST='"127.0.0.1"').
+-include local.mk
 LDFLAGS := $(MACHDEP) -Wl,-Map,build/sonoran.map -L$(DEVKITPRO)/libogc/lib/wii -L$(DEVKITPRO)/portlibs/ppc/lib
 LIBS    := -lpng16 -lz -lfat -lwiiuse -lbte -logc -lm
 

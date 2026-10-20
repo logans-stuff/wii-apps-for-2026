@@ -13,3 +13,4 @@ driver/wii-usb-headset/*.elf
 driver/*.zip
 driver/wii-usb-headset/headset.dol
 driver/wii-usb-headset/apps/
+local.mk

@@ -1,7 +1,11 @@
 /* NodeDB implementation. See nodedb.h. */
+#include <stdio.h>
 #include <string.h>
 
 #include "nodedb.h"
+
+#define NODEDB_MAGIC 0x4D4E4442u /* "MNDB" */
+#define NODEDB_VERSION 1
 
 static struct node nodes[NODEDB_MAX];
 static int order[NODEDB_MAX]; /* node indices, most-recently-heard first */
@@ -198,4 +202,47 @@ void nodedb_update(const struct mesh_pkt *pkt, int rssi, float snr, unsigned lon
     }
 
     move_to_front(idx);
+}
+
+int nodedb_save(const char *path)
+{
+    FILE *f = fopen(path, "wb");
+    uint32_t magic = NODEDB_MAGIC, ver = NODEDB_VERSION, cnt = (uint32_t)n_nodes;
+    int i, ok = 1;
+
+    if (f == NULL)
+        return -1;
+    ok &= fwrite(&magic, 4, 1, f) == 1;
+    ok &= fwrite(&ver, 4, 1, f) == 1;
+    ok &= fwrite(&cnt, 4, 1, f) == 1;
+    /* Most-recently-heard first, so a load keeps the ordering. */
+    for (i = 0; i < n_nodes; i++)
+        ok &= fwrite(&nodes[order[i]], sizeof(struct node), 1, f) == 1;
+    fclose(f);
+    return ok ? 0 : -1;
+}
+
+int nodedb_load(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    uint32_t magic = 0, ver = 0, cnt = 0, i;
+
+    if (f == NULL)
+        return -1;
+    if (fread(&magic, 4, 1, f) != 1 || fread(&ver, 4, 1, f) != 1 ||
+        fread(&cnt, 4, 1, f) != 1 || magic != NODEDB_MAGIC || ver != NODEDB_VERSION) {
+        fclose(f);
+        return -1;
+    }
+    nodedb_reset();
+    if (cnt > NODEDB_MAX)
+        cnt = NODEDB_MAX;
+    for (i = 0; i < cnt; i++) {
+        if (fread(&nodes[i], sizeof(struct node), 1, f) != 1)
+            break;
+        order[i] = (int)i; /* file is already most-recent-first */
+        n_nodes = (int)i + 1;
+    }
+    fclose(f);
+    return 0;
 }

@@ -5,6 +5,7 @@
  *   A = type a message   2 = quick chat   B = announce this node   Home = exit */
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include <gccore.h>
 #include <ogc/lwp_watchdog.h>
@@ -22,6 +23,7 @@ static struct mesh_config CFG;
 
 enum { VIEW_NODES, VIEW_MESSAGES };
 
+#define NODEDB_PATH "sd:/apps/meshtoad/nodedb.dat"
 #define BODY_TOP 9
 #define VIEW_ROWS 12
 #define MSG_MAX 64
@@ -102,7 +104,7 @@ static void node_row(const struct node *nd, unsigned long long now, char *out, i
 {
     char nm[8], age[12], hop[16], pos[36] = "", batt[16] = "";
     snprintf(nm, sizeof(nm), "%-4.4s", nd->has_name ? nd->short_name : "----");
-    fmt_age((unsigned)((now - nd->last_heard) / 1000), age, sizeof(age));
+    fmt_age((unsigned)(now - nd->last_heard), age, sizeof(age));
     if (nd->hops >= 0)
         snprintf(hop, sizeof(hop), "%dh", nd->hops);
     else
@@ -118,7 +120,7 @@ static void node_row(const struct node *nd, unsigned long long now, char *out, i
 static void render_nodes(void)
 {
     int i, count = nodedb_count(), top, maxtop;
-    unsigned long long now = net_ms();
+    unsigned long long now = (unsigned long long)time(NULL);
 
     if (node_sel >= count)
         node_sel = count > 0 ? count - 1 : 0;
@@ -207,13 +209,15 @@ int main(void)
 {
     char info[200] = "", err[200] = "";
     long packets = 0, crc_errors = 0, sent = 0, polls = 0;
-    int view = VIEW_NODES;
+    int view = VIEW_NODES, dirty = 0;
+    unsigned long long last_save = (unsigned long long)time(NULL);
 
     video_start();
     WPAD_Init();
     nodedb_reset();
     config_load(&CFG);               /* sd:/apps/meshtoad/config.txt, else defaults */
     mesh_set_key(CFG.key, CFG.keylen);
+    nodedb_load(NODEDB_PATH);         /* restore nodes heard in earlier sessions */
     printf("\x1b[2;1HSonoran LoRa node  (!%08x \"%s\", %s)\n",
            CFG.node_id, CFG.long_name, CFG.source);
     if (net_start(err, sizeof(err)) != 0)
@@ -300,6 +304,13 @@ int main(void)
                 render_nodes(); /* refresh ages ~1x/s */
         }
 
+        /* Persist the NodeDB every minute so it survives a relaunch. */
+        if (dirty && (unsigned long long)time(NULL) - last_save >= 60) {
+            nodedb_save(NODEDB_PATH);
+            last_save = (unsigned long long)time(NULL);
+            dirty = 0;
+        }
+
         n = sx_poll(buf, sizeof(buf), &rssi, &snr);
         if (n < 0) {
             crc_errors++;
@@ -308,7 +319,8 @@ int main(void)
             char derr[80], line[72];
             packets++;
             if (mesh_decode(buf, n, &pkt, derr, sizeof(derr)) == 0) {
-                nodedb_update(&pkt, rssi, snr, net_ms());
+                nodedb_update(&pkt, rssi, snr, (unsigned long long)time(NULL));
+                dirty = 1;
                 if (pkt.portnum == MESH_PORT_TEXT) {
                     snprintf(line, sizeof(line), "<%08x> %.55s", pkt.from, pkt.text);
                     dbg("lora: rx text from=%08x '%s'", pkt.from, pkt.text);
@@ -335,7 +347,8 @@ int main(void)
     }
 
     sx_close();
-    dbg("lora: exit (rx %ld, crc %ld, tx %ld, %d nodes)", packets, crc_errors,
+    nodedb_save(NODEDB_PATH); /* keep what we heard for next time */
+    dbg("lora: exit (rx %ld, crc %ld, tx %ld, %d nodes saved)", packets, crc_errors,
         sent, nodedb_count());
     net_stop();
     return 0;

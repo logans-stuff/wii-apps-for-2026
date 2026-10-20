@@ -23,15 +23,20 @@ struct node {
     int rssi;              /* of the last packet heard */
     float snr;
     int hops;              /* hops away, or -1 if unknown */
-    unsigned long long last_heard; /* ms */
+    unsigned long long last_heard; /* wall-clock epoch seconds */
     int packets;
 };
 
 void nodedb_reset(void);
-/* Fold one decoded packet into the table. now = current time in ms. */
+/* Fold one decoded packet into the table. now = current epoch seconds. */
 void nodedb_update(const struct mesh_pkt *pkt, int rssi, float snr, unsigned long long now);
 int nodedb_count(void);
 /* 0 = most recently heard. Returns NULL if i is out of range. */
 const struct node *nodedb_get(int i);
+
+/* Persist the table to an SD file and load it back (so nodes survive a
+ * relaunch). The SD must already be mounted. Return 0 on success. */
+int nodedb_save(const char *path);
+int nodedb_load(const char *path);
 
 #endif

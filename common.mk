@@ -40,12 +40,26 @@ endif
 ifeq ($(USE_OGC_USB),1)
   OBJ += build/ogc_usb.o
 endif
+GRR := $(ROOT)/third_party/GRRLIB/GRRLIB/GRRLIB
+ifeq ($(USE_GRRLIB),1)
+  CFLAGS += -I$(GRR) -I$(DEVKITPRO)/portlibs/ppc/include/freetype2
+  # Exclude the PNG/JPEG texture loaders (need pngu, which we don't ship);
+  # we only use shapes and TTF text.
+  GRR_SRC := $(filter-out %GRRLIB_fileIO.c %GRRLIB_texEdit.c,$(wildcard $(GRR)/*.c))
+  GRR_OBJ := $(patsubst %.c,build/grrlib/%.o,$(notdir $(GRR_SRC)))
+  OBJ += $(GRR_OBJ)
+  GRR_LIBS := -lfreetype -lpng16 -ljpeg -lbz2 -lbrotlidec -lbrotlicommon -lz
+endif
 
 build/$(APP).dol: build/$(APP).elf
 	elf2dol $< $@
 
 build/$(APP).elf: $(OBJ)
-	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(APP_LIBS)
+	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(GRR_LIBS) $(APP_LIBS)
+
+build/grrlib/%.o: $(GRR)/%.c
+	@mkdir -p build/grrlib
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 build/%.o: source/%.c
 	@mkdir -p $(dir $@)

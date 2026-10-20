@@ -2,7 +2,7 @@
 
 A USB Audio Class 1.0 driver for the Wii (libogc, IOS USBV5). It records
 from a USB headset microphone and plays to its headphones, at 48 kHz
-16-bit, without gaps. Tested with a Razer headset (USB ID 1532:0a49)
+16-bit, without gaps. Tested with a Razer BlackShark V2 Pro headset (USB ID 1532:0a49)
 on a Wii with the Homebrew Channel.
 
 | Part | Interface | Endpoint | Format |
@@ -11,7 +11,7 @@ on a Wii with the Homebrew Channel.
 | Headphones | 2, alt 1 | 0x05 iso OUT, 192 bytes per ms | 48 kHz stereo 16-bit |
 
 The driver reads the USB descriptors, so other USB Audio Class 1.0
-headsets with 16-bit streams should work too. Only the Razer is tested.
+headsets with 16-bit streams should work too. Only the BlackShark V2 Pro is tested.
 
 ## API (`source/usbaudio.h`)
 
@@ -51,7 +51,7 @@ This makes `headset.dol`. Hold A to record, release A to hear it.
 4. **Switch the headphones on only while they play**, with 64 ms of
    silence before and 32 ms after. A headset that stays on with no data
    buzzes.
-5. **Warm-up at open: play, record, play** (with silence). On the Razer,
+5. **Warm-up at open: play, record, play** (with silence). On the BlackShark V2 Pro,
    the first playback after power-on is slow and broken, and the first
    recording after the headphones were switched on the first time is
    silent.

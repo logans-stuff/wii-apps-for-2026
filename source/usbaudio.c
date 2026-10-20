@@ -1,6 +1,6 @@
 /* USB Audio Class 1.0 headset driver for the Wii.
  *
- * The descriptors of the tested headset (Razer, 1532:0a49):
+ * The descriptors of the tested headset (Razer BlackShark V2 Pro, 1532:0a49):
  *   interface 1 alt 1: microphone, iso IN  0x84, 96 bytes/ms  (48 kHz mono 16-bit)
  *   interface 2 alt 1: headphones, iso OUT 0x05, 192 bytes/ms (48 kHz stereo 16-bit)
  * The driver reads the descriptors and does not assume these numbers. */
@@ -176,7 +176,7 @@ int ua_open(char *info, size_t infolen, char *err, size_t errlen)
     }
     /* The headphones are switched on only while they play (ua_play).
      * A headset that stays on with no data can buzz.
-     * Measured on the Razer headset: the first playback after power-on
+     * Measured on the Razer BlackShark V2 Pro: the first playback after power-on
      * is slow and broken, and the first recording after the headphones
      * were switched on and off for the first time is silent (peak 0).
      * After the order "play, record, play" both work. So do that order

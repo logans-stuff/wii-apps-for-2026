@@ -24,6 +24,33 @@ static uint8_t cur_key[32] = {
 static int cur_keylen = 16;
 static int cur_hops = 3; /* hop limit / hop start for packets we send */
 static int cur_hw_model = 255; /* PRIVATE_HW; shown as the node's device type */
+static int cur_chan_hash = -1;  /* decrypt only this channel hash; -1 = any */
+static int cur_ok_to_mqtt;
+
+void mesh_set_channel_hash(int hash) { cur_chan_hash = hash; }
+void mesh_set_ok_to_mqtt(int ok) { cur_ok_to_mqtt = ok != 0; }
+
+uint8_t mesh_channel_hash(const char *name, const uint8_t *key, int keylen)
+{
+    uint8_t h = 0;
+    int i;
+    for (i = 0; name[i]; i++)
+        h ^= (uint8_t)name[i];
+    for (i = 0; i < keylen; i++)
+        h ^= key[i];
+    return h;
+}
+
+int mesh_hops_away(const struct mesh_pkt *p)
+{
+    /* hop_start 0 is only trustworthy from a sender that also sends the
+     * bitfield (firmware >= 2.5); before that it simply wasn't populated. */
+    if (p->hop_start == 0 && !(p->data_ok && p->has_bitfield))
+        return -1;
+    if (p->hop_start < p->hop_limit)
+        return -1;
+    return p->hop_start - p->hop_limit;
+}
 
 void mesh_set_hop_limit(int hops)
 {
@@ -103,26 +130,34 @@ static uint64_t read_varint(const uint8_t *buf, int len, int *pos)
     return v;
 }
 
-/* Parse a Data protobuf: field 1 = portnum (varint), field 2 = payload. */
-static void parse_data(const uint8_t *buf, int len, struct mesh_pkt *out)
+/* Parse a Data protobuf: field 1 = portnum (varint), field 2 = payload,
+ * 3 want_response, 4-7 fixed32 ids, 9 bitfield. Returns 0 when the whole
+ * buffer parsed cleanly (firmware drops a decryptable packet that doesn't). */
+static int parse_data(const uint8_t *buf, int len, struct mesh_pkt *out)
 {
     int pos = 0;
 
     while (pos < len) {
         uint64_t tag = read_varint(buf, len, &pos);
         int field = (int)(tag >> 3), wire = (int)(tag & 7);
-        if (pos > len)
-            return;
+        if (pos > len || field == 0)
+            return -1;
         if (wire == 0) {            /* varint */
             uint64_t v = read_varint(buf, len, &pos);
+            if (pos > len)
+                return -1;
             if (field == 1)
                 out->portnum = (uint32_t)v;
             else if (field == 3)
                 out->want_response = v != 0;
+            else if (field == 9) {
+                out->bitfield = (uint32_t)v;
+                out->has_bitfield = 1;
+            }
         } else if (wire == 2) {     /* length-delimited */
             uint64_t n = read_varint(buf, len, &pos);
             if (pos > len || n > (uint64_t)(len - pos))
-                return;
+                return -1;
             if (field == 2) {
                 int m = (int)n;
                 if (m > (int)sizeof(out->payload))
@@ -133,18 +168,21 @@ static void parse_data(const uint8_t *buf, int len, struct mesh_pkt *out)
             pos += (int)n;
         } else if (wire == 5) {     /* 32-bit */
             if (pos + 4 > len)
-                return;
+                return -1;
             if (field == 4) out->data_dest = rd32(buf + pos);
             else if (field == 5) out->data_source = rd32(buf + pos);
             else if (field == 6) out->request_id = rd32(buf + pos);
             else if (field == 7) out->reply_id = rd32(buf + pos);
             pos += 4;
         } else if (wire == 1) {     /* 64-bit */
+            if (pos + 8 > len)
+                return -1;
             pos += 8;
         } else {
-            return;                 /* unknown wire type */
+            return -1;              /* unknown wire type */
         }
     }
+    return 0;
 }
 
 /* Parse a User protobuf (NodeInfo payload): field 2 = long name,
@@ -200,6 +238,16 @@ int mesh_decode(const uint8_t *frame, int len, struct mesh_pkt *out,
     out->id = rd32(frame + 8);
     out->flags = frame[12];
     out->channel = frame[13];
+    out->hop_limit = frame[12] & 7;
+    out->want_ack = (frame[12] >> 3) & 1;
+    out->via_mqtt = (frame[12] >> 4) & 1;
+    out->hop_start = frame[12] >> 5;
+    out->next_hop = frame[14];
+    out->relay_node = frame[15];
+    if (cur_chan_hash >= 0 && out->channel != (uint8_t)cur_chan_hash) {
+        out->opaque = 1; /* another channel (or a PKI DM): relay-only */
+        return 0;
+    }
 
     plen = len - HEADER_LEN;
     if (plen > (int)sizeof(plain))
@@ -212,7 +260,17 @@ int mesh_decode(const uint8_t *frame, int len, struct mesh_pkt *out,
         return -1;
     }
 
-    parse_data(plain, plen, out);
+    out->data_ok = parse_data(plain, plen, out) == 0 && out->portnum != 0;
+    if (out->has_bitfield && (out->bitfield & MESH_BITFIELD_WANT_RESPONSE))
+        out->want_response = 1;
+    if (!out->data_ok) {
+        /* Keep the raw decrypted bytes for --meshhex debugging. */
+        int m = plen < (int)sizeof(out->payload) ? plen : (int)sizeof(out->payload);
+        out->portnum = 0;
+        memcpy(out->payload, plain, (size_t)m);
+        out->payload_len = m;
+        return 0;
+    }
     if (out->portnum == MESH_PORT_TEXT && out->payload_len > 0) {
         int n = out->payload_len;
         if (n > (int)sizeof(out->text) - 1)
@@ -305,27 +363,198 @@ static int put_varint(uint8_t *buf, uint64_t v)
     return n;
 }
 
-/* Header + AES-CTR(data) -> frame. Return frame length, or -1 if too big. */
+void mesh_write_header(uint8_t *frame, const struct mesh_hdr *h)
+{
+    wr32(frame, h->to);
+    wr32(frame + 4, h->from);
+    wr32(frame + 8, h->id);
+    frame[12] = (uint8_t)((h->hop_limit & 7) | (h->want_ack ? 0x08 : 0) |
+                          (h->via_mqtt ? 0x10 : 0) | ((h->hop_start & 7) << 5));
+    frame[13] = h->channel;
+    frame[14] = h->next_hop;
+    frame[15] = h->relay_node;
+}
+
+/* Header + AES-CTR(data + bitfield) -> frame. Return length, or -1. */
+static int seal_frame(const struct mesh_hdr *h, const uint8_t *data, int dlen,
+                      int want_response, uint8_t *frame, int maxlen)
+{
+    uint8_t nonce[16], plain[256];
+    int n;
+
+    if (dlen < 0 || dlen + 3 > (int)sizeof(plain))
+        return -1;
+    memcpy(plain, data, (size_t)dlen);
+    n = dlen;
+    plain[n++] = 0x48; /* field 9 bitfield, always present from 2.5 on */
+    n += put_varint(plain + n, (uint64_t)((cur_ok_to_mqtt ? MESH_BITFIELD_OK_TO_MQTT : 0) |
+                                          (want_response ? MESH_BITFIELD_WANT_RESPONSE : 0)));
+    if (HEADER_LEN + n > maxlen)
+        return -1;
+    mesh_write_header(frame, h);
+    make_nonce(nonce, h->id, h->from);
+    if (aes_ctr(cur_key, cur_keylen, nonce, plain, frame + HEADER_LEN, n) != 0)
+        return -1;
+    return HEADER_LEN + n;
+}
+
+/* Our own packet with the configured hop limit (Router::send: hop_start =
+ * hop_limit, relay_node = our last byte, broadcasts never want_ack). */
 static int build_frame(uint32_t from, uint32_t to, uint32_t id, uint8_t chan,
-                       const uint8_t *data, int dlen, int want_ack,
+                       const uint8_t *data, int dlen, int want_ack, int want_response,
                        uint8_t *frame, int maxlen)
 {
-    uint8_t nonce[16];
+    struct mesh_hdr h;
+    memset(&h, 0, sizeof(h));
+    h.to = to;
+    h.from = from;
+    h.id = id;
+    h.hop_limit = h.hop_start = (uint8_t)cur_hops;
+    h.want_ack = to != MESH_BROADCAST && want_ack;
+    h.channel = chan;
+    h.relay_node = (uint8_t)from;
+    return seal_frame(&h, data, dlen, want_response, frame, maxlen);
+}
 
-    if (dlen < 0 || HEADER_LEN + dlen > maxlen)
+int mesh_encode(const struct mesh_hdr *h, const struct mesh_data *d, uint8_t *frame, int maxlen)
+{
+    uint8_t data[256];
+    int n = 0;
+
+    if (d->payload_len < 0 || d->payload_len > 233)
         return -1;
-    wr32(frame, to);
-    wr32(frame + 4, from);
-    wr32(frame + 8, id);
-    frame[12] = (uint8_t)((cur_hops & 7) | (want_ack ? 0x08 : 0) |
-                          ((cur_hops & 7) << 5)); /* hop limit + ACK + start */
-    frame[13] = chan;
-    frame[14] = 0;     /* next_hop */
-    frame[15] = 0;     /* relay_node */
-    make_nonce(nonce, id, from);
-    if (aes_ctr(cur_key, cur_keylen, nonce, data, frame + HEADER_LEN, dlen) != 0)
+    data[n++] = 0x08;
+    n += put_varint(data + n, d->portnum);
+    if (d->payload_len > 0) {
+        data[n++] = 0x12;
+        n += put_varint(data + n, (uint64_t)d->payload_len);
+        memcpy(data + n, d->payload, (size_t)d->payload_len);
+        n += d->payload_len;
+    }
+    if (d->want_response) {
+        data[n++] = 0x18;
+        data[n++] = 0x01;
+    }
+    if (d->dest) { data[n++] = 0x25; wr32(data + n, d->dest); n += 4; }
+    if (d->source) { data[n++] = 0x2d; wr32(data + n, d->source); n += 4; }
+    if (d->request_id) { data[n++] = 0x35; wr32(data + n, d->request_id); n += 4; }
+    if (d->reply_id) { data[n++] = 0x3d; wr32(data + n, d->reply_id); n += 4; }
+    return seal_frame(h, data, n, d->want_response, frame, maxlen);
+}
+
+static int put_f32(uint8_t *b, float f)
+{
+    uint32_t u;
+    memcpy(&u, &f, 4);
+    wr32(b, u);
+    return 4;
+}
+
+int mesh_pb_position(uint8_t *out, int max, int32_t lat_i, int32_t lon_i, int has_alt, int32_t alt,
+                     uint32_t time, uint32_t precision_bits)
+{
+    int n = 0;
+    if (max < 40)
         return -1;
-    return HEADER_LEN + dlen;
+    out[n++] = 0x0d; wr32(out + n, (uint32_t)lat_i); n += 4;   /* sfixed32 latitude_i */
+    out[n++] = 0x15; wr32(out + n, (uint32_t)lon_i); n += 4;   /* sfixed32 longitude_i */
+    if (has_alt) {
+        out[n++] = 0x18;                                       /* int32 altitude */
+        n += put_varint(out + n, (uint64_t)(int64_t)alt);
+    }
+    if (time) { out[n++] = 0x25; wr32(out + n, time); n += 4; } /* fixed32 time */
+    out[n++] = 0x28; out[n++] = 0x01;                          /* location_source = LOC_MANUAL */
+    out[n++] = 0xb8; out[n++] = 0x01;                          /* field 23 precision_bits */
+    n += put_varint(out + n, precision_bits);
+    return n;
+}
+
+int mesh_pb_device_metrics(uint8_t *out, int max, uint32_t time, uint32_t battery_level,
+                           float channel_util, float air_util_tx, uint32_t uptime)
+{
+    uint8_t m[32];
+    int k = 0, n = 0;
+    m[k++] = 0x08; k += put_varint(m + k, battery_level);
+    m[k++] = 0x1d; k += put_f32(m + k, channel_util);
+    m[k++] = 0x25; k += put_f32(m + k, air_util_tx);
+    m[k++] = 0x28; k += put_varint(m + k, uptime);
+    if (max < k + 8)
+        return -1;
+    if (time) { out[n++] = 0x0d; wr32(out + n, time); n += 4; }
+    out[n++] = 0x12;
+    out[n++] = (uint8_t)k;
+    memcpy(out + n, m, (size_t)k);
+    return n + k;
+}
+
+int mesh_pb_neighborinfo(uint8_t *out, int max, uint32_t node_id, uint32_t last_sent_by,
+                         uint32_t interval_secs, const uint32_t *ids, const float *snrs, int count)
+{
+    int n = 0, i;
+    if (max < 20 + count * 14)
+        return -1;
+    out[n++] = 0x08; n += put_varint(out + n, node_id);
+    out[n++] = 0x10; n += put_varint(out + n, last_sent_by);
+    out[n++] = 0x18; n += put_varint(out + n, interval_secs);
+    for (i = 0; i < count; i++) {
+        uint8_t nb[12];
+        int k = 0;
+        nb[k++] = 0x08; k += put_varint(nb + k, ids[i]);
+        nb[k++] = 0x15; k += put_f32(nb + k, snrs[i]);
+        out[n++] = 0x22;
+        out[n++] = (uint8_t)k;
+        memcpy(out + n, nb, (size_t)k);
+        n += k;
+    }
+    return n;
+}
+
+int mesh_parse_neighborinfo(const uint8_t *b, int len, uint32_t *node_id, uint32_t *last_sent_by,
+                            uint32_t *interval, uint32_t *ids, float *snrs, int max, int *count)
+{
+    int pos = 0;
+    *node_id = *last_sent_by = *interval = 0;
+    *count = 0;
+    while (pos < len) {
+        uint64_t tag = read_varint(b, len, &pos);
+        int field = (int)(tag >> 3), wire = (int)(tag & 7);
+        if (pos > len) return -1;
+        if (wire == 0) {
+            uint32_t v = (uint32_t)read_varint(b, len, &pos);
+            if (field == 1) *node_id = v;
+            else if (field == 2) *last_sent_by = v;
+            else if (field == 3) *interval = v;
+        } else if (wire == 2) {
+            int sub = (int)read_varint(b, len, &pos), end = pos + sub;
+            if (pos > len || sub < 0 || end > len) return -1;
+            if (field == 4 && *count < max) {
+                uint32_t id = 0;
+                float snr = 0.0f;
+                while (pos < end) {
+                    uint64_t t = read_varint(b, end, &pos);
+                    int f = (int)(t >> 3), w = (int)(t & 7);
+                    if (pos > end) return -1;
+                    if (f == 1 && w == 0) id = (uint32_t)read_varint(b, end, &pos);
+                    else if (f == 2 && w == 5 && pos + 4 <= end) {
+                        uint32_t u = rd32(b + pos);
+                        memcpy(&snr, &u, 4);
+                        pos += 4;
+                    } else if (w == 0) read_varint(b, end, &pos);
+                    else if (w == 5) pos += 4;
+                    else if (w == 1) pos += 8;
+                    else if (w == 2) pos += (int)read_varint(b, end, &pos);
+                    else return -1;
+                }
+                ids[*count] = id;
+                snrs[*count] = snr;
+                (*count)++;
+            }
+            pos = end;
+        } else if (wire == 5) pos += 4;
+        else if (wire == 1) pos += 8;
+        else return -1;
+    }
+    return pos == len ? 0 : -1;
 }
 
 int mesh_encode_text(uint32_t from, uint32_t to, uint32_t id, uint8_t chan_hash,
@@ -343,18 +572,16 @@ int mesh_encode_text(uint32_t from, uint32_t to, uint32_t id, uint8_t chan_hash,
     memcpy(data + n, text, (size_t)tlen);
     n += tlen;
     return build_frame(from, to, id, chan_hash, data, n,
-                       to != 0xffffffffu, frame, maxlen);
+                       to != 0xffffffffu, 0, frame, maxlen);
 }
 
-int mesh_encode_nodeinfo(uint32_t from, uint32_t id, uint8_t chan_hash,
-                         const char *long_name, const char *short_name,
-                         uint8_t *frame, int maxlen)
+int mesh_pb_user(uint8_t *user, int max, uint32_t node, const char *long_name, const char *short_name,
+                 int hw_model, int role)
 {
-    uint8_t user[128], data[160];
     char idstr[10];
-    int u = 0, d = 0, ln, sn, il;
+    int u = 0, ln, sn, il;
 
-    snprintf(idstr, sizeof(idstr), "!%08x", from);
+    snprintf(idstr, sizeof(idstr), "!%08x", node);
     il = (int)strlen(idstr);
     ln = (int)strlen(long_name);
     sn = (int)strlen(short_name);
@@ -362,7 +589,9 @@ int mesh_encode_nodeinfo(uint32_t from, uint32_t id, uint8_t chan_hash,
         ln = 39;
     if (sn > 4)
         sn = 4;
-    /* User protobuf: id(1), long_name(2), short_name(3), hw_model(5)=0. */
+    if (max < il + ln + sn + 12)
+        return -1;
+    /* User: id(1), long_name(2), short_name(3), hw_model(5), role(7). */
     user[u++] = 0x0a;
     u += put_varint(user + u, (uint64_t)il);
     memcpy(user + u, idstr, (size_t)il);
@@ -375,9 +604,25 @@ int mesh_encode_nodeinfo(uint32_t from, uint32_t id, uint8_t chan_hash,
     u += put_varint(user + u, (uint64_t)sn);
     memcpy(user + u, short_name, (size_t)sn);
     u += sn;
-    user[u++] = 0x28; /* field 5 hw_model varint */
-    u += put_varint(user + u, (uint64_t)cur_hw_model);
+    user[u++] = 0x28;
+    u += put_varint(user + u, (uint64_t)(hw_model & 0xff));
+    if (role) {
+        user[u++] = 0x38;
+        u += put_varint(user + u, (uint64_t)role);
+    }
+    return u;
+}
 
+int mesh_encode_nodeinfo(uint32_t from, uint32_t id, uint8_t chan_hash,
+                         const char *long_name, const char *short_name,
+                         uint8_t *frame, int maxlen)
+{
+    uint8_t user[128], data[160];
+    int u, d = 0;
+
+    u = mesh_pb_user(user, sizeof(user), from, long_name, short_name, cur_hw_model, 0);
+    if (u < 0)
+        return -1;
     /* Data: portnum(1)=NODEINFO, payload(2)=user. */
     data[d++] = 0x08;
     data[d++] = MESH_PORT_NODEINFO;
@@ -385,7 +630,7 @@ int mesh_encode_nodeinfo(uint32_t from, uint32_t id, uint8_t chan_hash,
     d += put_varint(data + d, (uint64_t)u);
     memcpy(data + d, user, (size_t)u);
     d += u;
-    return build_frame(from, 0xffffffffu, id, chan_hash, data, d, 0, frame, maxlen);
+    return build_frame(from, 0xffffffffu, id, chan_hash, data, d, 0, 0, frame, maxlen);
 }
 
 int mesh_encode_traceroute(uint32_t from, uint32_t to, uint32_t id,
@@ -401,7 +646,7 @@ int mesh_encode_traceroute(uint32_t from, uint32_t to, uint32_t id,
     data[n++] = 0x25; /* Data.dest: fixed32, mandatory for RouteDiscovery */
     wr32(data + n, to);
     n += 4;
-    return build_frame(from, to, id, chan_hash, data, n, 1, frame, maxlen);
+    return build_frame(from, to, id, chan_hash, data, n, 1, 1, frame, maxlen);
 }
 
 int mesh_routing_error(const uint8_t *b, int len)
@@ -471,7 +716,7 @@ int mesh_encode_ack(uint32_t from, uint32_t to, uint32_t id, uint8_t chan_hash,
     data[n++] = 0x35; /* Data.request_id: fixed32 */
     wr32(data + n, request_id);
     n += 4;
-    return build_frame(from, to, id, chan_hash, data, n, 0, frame, maxlen);
+    return build_frame(from, to, id, chan_hash, data, n, 0, 0, frame, maxlen);
 }
 
 /* Packed repeated field: tag, length, then fixed32 ids or int32 varints. */
@@ -523,7 +768,7 @@ int mesh_encode_traceroute_reply(uint32_t from, uint32_t to, uint32_t id,
     data[d++] = 0x35; /* Data.request_id */
     wr32(data + d, request_id);
     d += 4;
-    return build_frame(from, to, id, chan_hash, data, d, 0, frame, maxlen);
+    return build_frame(from, to, id, chan_hash, data, d, 0, 0, frame, maxlen);
 }
 
 int mesh_selftest(char *err, size_t errlen)

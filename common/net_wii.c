@@ -90,6 +90,14 @@ int net_start(char *err, size_t errlen)
     return -1;
 }
 
+/* Tear the network down before returning to the loader. Without this the
+ * connection is left up and the Homebrew Channel can't re-init Wi-Fi until
+ * the console is rebooted. */
+void net_stop(void)
+{
+    net_deinit();
+}
+
 int tcp_open(const char *host, int port, char *err, size_t errlen)
 {
     struct hostent *he;

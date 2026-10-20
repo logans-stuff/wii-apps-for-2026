@@ -168,12 +168,15 @@ static void send_nodeinfo(void)
     dbg("lora: TX nodeinfo rc=%d len=%d", rc, flen);
 }
 
+/* Wait for Home, then shut the network down so HBC can reconnect Wi-Fi. */
 static int wait_home(void)
 {
     for (;;) {
         WPAD_ScanPads();
-        if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME)
+        if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME) {
+            net_stop();
             return 0;
+        }
         VIDEO_WaitVSync();
     }
 }
@@ -298,5 +301,6 @@ int main(void)
     sx_close();
     dbg("lora: exit (rx %ld, crc %ld, tx %ld, %d nodes)", packets, crc_errors,
         sent, nodedb_count());
+    net_stop();
     return 0;
 }

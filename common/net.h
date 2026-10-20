@@ -7,6 +7,11 @@
 /* Start the network. Return 0 when it is ready. */
 int net_start(char *err, size_t errlen);
 
+/* Shut the network down before returning to the loader (Wii only; a no-op
+ * elsewhere). Call it on every exit path so the Homebrew Channel can re-init
+ * Wi-Fi without a reboot. */
+void net_stop(void);
+
 /* Open a TCP connection. Return a handle (>= 0), or a negative number. */
 int tcp_open(const char *host, int port, char *err, size_t errlen);
 int tcp_send(int handle, const void *data, int len);

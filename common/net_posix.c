@@ -19,6 +19,10 @@ int net_start(char *err, size_t errlen)
     return 0;
 }
 
+void net_stop(void)
+{
+}
+
 int tcp_open(const char *host, int port, char *err, size_t errlen)
 {
     struct addrinfo hints, *res, *ai;

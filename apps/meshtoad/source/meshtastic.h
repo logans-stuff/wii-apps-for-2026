@@ -36,6 +36,10 @@ struct mesh_pkt {
 int mesh_decode(const uint8_t *frame, int len, struct mesh_pkt *out,
                 char *err, size_t errlen);
 
+/* Set the channel key (PSK). len is 16 or 32; anything else, or a NULL key,
+ * resets to the public default key. Applies to decode and encode. */
+void mesh_set_key(const uint8_t *key, int len);
+
 /* Self-test: build a text packet, encrypt it, decode it back. Returns 0 on
  * success. Host-runnable; no radio needed. */
 int mesh_selftest(char *err, size_t errlen);

@@ -16,6 +16,24 @@ static const uint8_t DEFAULT_KEY[16] = {
     0xf0, 0xbc, 0xff, 0xab, 0xcf, 0x4e, 0x69, 0x01
 };
 
+/* The channel key in use (defaults to the public key; config can override). */
+static uint8_t cur_key[32] = {
+    0xd4, 0xf1, 0xbb, 0x3a, 0x20, 0x29, 0x07, 0x59,
+    0xf0, 0xbc, 0xff, 0xab, 0xcf, 0x4e, 0x69, 0x01
+};
+static int cur_keylen = 16;
+
+void mesh_set_key(const uint8_t *key, int len)
+{
+    if (key != NULL && (len == 16 || len == 32)) {
+        memcpy(cur_key, key, (size_t)len);
+        cur_keylen = len;
+    } else {
+        memcpy(cur_key, DEFAULT_KEY, sizeof(DEFAULT_KEY));
+        cur_keylen = 16;
+    }
+}
+
 static uint32_t rd32(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
@@ -168,7 +186,7 @@ int mesh_decode(const uint8_t *frame, int len, struct mesh_pkt *out,
         plen = (int)sizeof(plain);
 
     make_nonce(nonce, out->id, out->from);
-    if (aes_ctr(DEFAULT_KEY, sizeof(DEFAULT_KEY), nonce,
+    if (aes_ctr(cur_key, cur_keylen, nonce,
                 frame + HEADER_LEN, plain, plen) != 0) {
         snprintf(err, errlen, "AES-CTR decrypt failed");
         return -1;
@@ -217,7 +235,7 @@ static int build_frame(uint32_t from, uint32_t to, uint32_t id, uint8_t chan,
     frame[14] = 0;     /* next_hop */
     frame[15] = 0;     /* relay_node */
     make_nonce(nonce, id, from);
-    if (aes_ctr(DEFAULT_KEY, sizeof(DEFAULT_KEY), nonce, data, frame + HEADER_LEN, dlen) != 0)
+    if (aes_ctr(cur_key, cur_keylen, nonce, data, frame + HEADER_LEN, dlen) != 0)
         return -1;
     return HEADER_LEN + dlen;
 }
@@ -299,7 +317,7 @@ int mesh_selftest(char *err, size_t errlen)
 
     /* Encrypt and wrap in a header, the way a sender would. */
     make_nonce(nonce, id, from);
-    if (aes_ctr(DEFAULT_KEY, sizeof(DEFAULT_KEY), nonce, data, cipher, dlen) != 0) {
+    if (aes_ctr(cur_key, cur_keylen, nonce, data, cipher, dlen) != 0) {
         snprintf(err, errlen, "selftest: encrypt failed");
         return -1;
     }

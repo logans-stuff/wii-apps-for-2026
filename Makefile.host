@@ -1,7 +1,7 @@
 # Linux test build: make -f Makefile.host
 include wolfssl.mk
-CFLAGS := -O2 -g -Wall $(WOLF_CFLAGS)
-SRC := source/hosttest.c source/https.c source/api.c source/net_posix.c $(CJSON_SRC) $(WOLF_SRC)
+CFLAGS := -O2 -g -Wall $(WOLF_CFLAGS) -Ithird_party/qrcodegen/c
+SRC := source/hosttest.c source/https.c source/api.c source/discord.c source/dc_qr.c source/ws.c source/net_posix.c third_party/qrcodegen/c/qrcodegen.c $(CJSON_SRC) $(WOLF_SRC)
 build-host/hosttest: $(SRC) include/user_settings.h source/cacerts.h
 	mkdir -p build-host
 	$(CC) $(CFLAGS) -o $@ $(SRC)

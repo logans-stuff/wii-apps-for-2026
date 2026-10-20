@@ -12,6 +12,7 @@ No change to Sonoran is necessary.
 | devkitPPC image | `devkitpro/devkitppc:20260503` |
 | wolfSSL | `v5.9.4-stable` |
 | cJSON | `v1.7.19` |
+| QR-Code-generator (Nayuki, MIT) | `v1.8.0` |
 | Root certificates | host `/etc/ssl/certs/ca-certificates.crt`, through `tools/mkcerts.py` |
 
 ## Build
@@ -19,6 +20,7 @@ No change to Sonoran is necessary.
     mkdir -p third_party
     git clone --depth 1 -b v5.9.4-stable https://github.com/wolfSSL/wolfssl.git third_party/wolfssl
     git clone --depth 1 -b v1.7.19 https://github.com/DaveGamble/cJSON.git third_party/cJSON
+    git clone --depth 1 -b v1.8.0 https://github.com/nayuki/QR-Code-generator.git third_party/qrcodegen
     python3 -I tools/mkcerts.py
     ./build.sh                     # makes build/boot.dol
 
@@ -49,3 +51,10 @@ No server change is necessary. See `dist/apps/sonoran/README.txt`.
   that the app can read.
 - The Wii clock must be correct for the certificate date check.
 - Text out of ASCII (for example emoji) shows as `?`.
+
+## Discord screen
+
+Discord QR login (remote auth gateway v2), REST API v9 with the user
+token. Only requests that the user starts. Discord does not allow
+unofficial clients on user accounts; the user accepts that risk.
+Test the QR flow up to the code: `./build-host/hosttest --qr`.

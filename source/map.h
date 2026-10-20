@@ -23,6 +23,9 @@ int map_nearest(const struct map_view *v, const struct map_node *nodes, int n);
 /* Move the center by a part of the screen. dx, dy in screen pixels. */
 void map_pan(struct map_view *v, int dx, int dy);
 
+/* Fill a box in the XFB directly: white or black. x and w are made even. */
+void fb_rect(int x, int y, int w, int h, int white);
+
 /* Number of tiles that failed in the last map_draw. */
 int map_failed_tiles(void);
 

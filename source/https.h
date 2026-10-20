@@ -26,7 +26,27 @@ int https_request(const char *method, const char *host, const char *path,
                   const char *cookie, const char *want_cookie, const char *json,
                   struct http_reply *reply);
 
+/* Same, with raw header lines (each ends with CRLF) instead of a cookie. */
+int https_request_h(const char *method, const char *host, const char *path,
+                    const char *headers, const char *want_cookie, const char *json,
+                    struct http_reply *reply);
+
 void http_free(struct http_reply *reply);
+
+/* A TLS connection that stays open (for WebSocket). Keep the struct at
+ * a fixed address while it is open: wolfSSL keeps a pointer to it. */
+struct tls_conn {
+    void *ssl;
+    int handle;
+};
+
+int tls_open(struct tls_conn *c, const char *host, char *err, size_t errlen);
+int tls_write_all(struct tls_conn *c, const void *data, int len);
+/* Read some bytes. Return > 0 bytes, 0 when closed, < 0 on error. */
+int tls_read(struct tls_conn *c, void *buf, int len);
+/* 1 when data can be read now, or comes inside ms milliseconds. */
+int tls_readable(struct tls_conn *c, int ms);
+void tls_close(struct tls_conn *c);
 
 /* TLS version and cipher of the last connection. */
 const char *https_last_tls(void);

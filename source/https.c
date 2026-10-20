@@ -183,6 +183,30 @@ int https_request(const char *method, const char *host, const char *path,
                   const char *cookie, const char *want_cookie, const char *json,
                   struct http_reply *reply)
 {
+    char *headers = NULL;
+    int rc;
+
+    if (cookie != NULL) {
+        headers = malloc(strlen(cookie) + 16);
+        if (headers == NULL) {
+            memset(reply, 0, sizeof(*reply));
+            snprintf(reply->err, sizeof(reply->err), "out of memory");
+            return -1;
+        }
+        sprintf(headers, "Cookie: %s\r\n", cookie);
+    }
+    rc = https_request_h(method, host, path, headers, want_cookie, json, reply);
+    if (headers != NULL) {
+        memset(headers, 0, strlen(headers));
+        free(headers);
+    }
+    return rc;
+}
+
+int https_request_h(const char *method, const char *host, const char *path,
+                    const char *headers, const char *want_cookie, const char *json,
+                    struct http_reply *reply)
+{
     WOLFSSL *ssl = NULL;
     int handle = -1;
     char *req = NULL;
@@ -221,20 +245,18 @@ int https_request(const char *method, const char *host, const char *path,
     snprintf(last_tls, sizeof(last_tls), "%s %s", wolfSSL_get_version(ssl),
              wolfSSL_get_cipher(ssl));
 
-    req = malloc(4096 + (cookie ? strlen(cookie) : 0) + (json ? strlen(json) : 0));
+    req = malloc(4096 + (headers ? strlen(headers) : 0) + (json ? strlen(json) : 0));
     if (req == NULL)
         goto nomem;
     ret = sprintf(req,
                   "%s %s HTTP/1.1\r\n"
                   "Host: %s\r\n"
-                  "User-Agent: SonoranWii/0.2 (personal Wii homebrew viewer for s.azmsh.dev)\r\n"
+                  "User-Agent: SonoranWii/0.3 (personal Wii homebrew viewer for s.azmsh.dev)\r\n"
                   "Accept: application/json\r\n"
                   "Accept-Encoding: identity\r\n"
                   "Connection: close\r\n"
-                  "%s%s%s",
-                  method, path, host,
-                  cookie ? "Cookie: " : "", cookie ? cookie : "",
-                  cookie ? "\r\n" : "");
+                  "%s",
+                  method, path, host, headers ? headers : "");
     if (json != NULL)
         ret += sprintf(req + ret, "Content-Type: application/json\r\n"
                        "Content-Length: %u\r\n\r\n%s", (unsigned)strlen(json), json);
@@ -313,7 +335,7 @@ nomem:
     snprintf(reply->err, sizeof(reply->err), "out of memory");
 done:
     if (req != NULL)
-        memset(req, 0, 4096 + (cookie ? strlen(cookie) : 0) + (json ? strlen(json) : 0));
+        memset(req, 0, 4096 + (headers ? strlen(headers) : 0) + (json ? strlen(json) : 0));
     free(req);
     free(buf);
     if (ssl != NULL) {
@@ -329,4 +351,71 @@ void http_free(struct http_reply *reply)
 {
     free(reply->body);
     reply->body = NULL;
+}
+
+int tls_open(struct tls_conn *c, const char *host, char *err, size_t errlen)
+{
+    WOLFSSL *ssl;
+    int ret;
+
+    c->ssl = NULL;
+    c->handle = tcp_open(host, 443, err, errlen);
+    if (c->handle < 0)
+        return -1;
+    ssl = wolfSSL_new(ctx);
+    if (ssl == NULL) {
+        snprintf(err, errlen, "wolfSSL_new failed");
+        tcp_close(c->handle);
+        return -1;
+    }
+    wolfSSL_SetIOReadCtx(ssl, &c->handle);
+    wolfSSL_SetIOWriteCtx(ssl, &c->handle);
+    wolfSSL_UseSNI(ssl, WOLFSSL_SNI_HOST_NAME, host, (unsigned short)strlen(host));
+    wolfSSL_check_domain_name(ssl, host);
+    ret = wolfSSL_connect(ssl);
+    if (ret != WOLFSSL_SUCCESS) {
+        tls_error(ssl, ret, err, errlen);
+        wolfSSL_free(ssl);
+        tcp_close(c->handle);
+        return -1;
+    }
+    c->ssl = ssl;
+    dbg("tls_open %s: ok", host);
+    return 0;
+}
+
+int tls_write_all(struct tls_conn *c, const void *data, int len)
+{
+    return wolfSSL_write((WOLFSSL *)c->ssl, data, len) == len ? 0 : -1;
+}
+
+int tls_read(struct tls_conn *c, void *buf, int len)
+{
+    int n = wolfSSL_read((WOLFSSL *)c->ssl, buf, len);
+
+    if (n > 0)
+        return n;
+    n = wolfSSL_get_error((WOLFSSL *)c->ssl, n);
+    if (n == WOLFSSL_ERROR_ZERO_RETURN || n == SOCKET_PEER_CLOSED_E)
+        return 0;
+    return -1;
+}
+
+int tls_readable(struct tls_conn *c, int ms)
+{
+    if (wolfSSL_pending((WOLFSSL *)c->ssl) > 0)
+        return 1;
+    return tcp_wait_readable(c->handle, ms) > 0;
+}
+
+void tls_close(struct tls_conn *c)
+{
+    if (c->ssl != NULL) {
+        wolfSSL_shutdown((WOLFSSL *)c->ssl);
+        wolfSSL_free((WOLFSSL *)c->ssl);
+        c->ssl = NULL;
+    }
+    if (c->handle >= 0)
+        tcp_close(c->handle);
+    c->handle = -1;
 }

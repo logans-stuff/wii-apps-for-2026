@@ -1,5 +1,7 @@
 /* TCP layer for a Linux test build. */
 #include <netdb.h>
+#include <poll.h>
+#include <time.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -87,4 +89,22 @@ void dbg(const char *fmt, ...)
     vfprintf(stderr, fmt, ap);
     fprintf(stderr, "\n");
     va_end(ap);
+}
+
+int tcp_wait_readable(int handle, int ms)
+{
+    struct pollfd p = { handle, POLLIN, 0 };
+    int ret = poll(&p, 1, ms);
+
+    if (ret < 0)
+        return -1;
+    return ret > 0;
+}
+
+unsigned long long net_ms(void)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (unsigned long long)ts.tv_sec * 1000 + (unsigned long long)ts.tv_nsec / 1000000;
 }

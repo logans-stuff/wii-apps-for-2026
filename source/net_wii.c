@@ -216,3 +216,22 @@ void dbg(const char *fmt, ...)
         net_send(fd, line, n, 0);
     net_close(fd);
 }
+
+int tcp_wait_readable(int handle, int ms)
+{
+    struct pollsd p;
+    s32 ret;
+
+    p.socket = handle;
+    p.events = 0x0003; /* POLLIN: POLLRDNORM | POLLRDBAND */
+    p.revents = 0;
+    ret = net_poll(&p, 1, ms);
+    if (ret < 0)
+        return ret;
+    return ret > 0 && p.revents != 0;
+}
+
+unsigned long long net_ms(void)
+{
+    return ticks_to_millisecs(gettime());
+}

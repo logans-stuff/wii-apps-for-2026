@@ -398,3 +398,21 @@ int map_failed_tiles(void)
 {
     return failed;
 }
+
+void fb_rect(int x, int y, int w, int h, int white)
+{
+    u32 c = white ? solid(255, 255, 255) : solid(0, 0, 0);
+    int row, col;
+
+    x &= ~1;
+    w = (w + 1) & ~1;
+    for (row = y; row < y + h; row++) {
+        if (row < 0 || row >= fb_h)
+            continue;
+        for (col = x; col < x + w; col += 2) {
+            if (col < 0 || col >= fb_w)
+                continue;
+            xfb_words[(size_t)row * pairs_w + col / 2] = c;
+        }
+    }
+}

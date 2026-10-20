@@ -13,6 +13,13 @@ int tcp_send(int handle, const void *data, int len);
 int tcp_recv(int handle, void *buf, int len);
 void tcp_close(int handle);
 
+/* Wait until the socket has data, up to ms milliseconds.
+ * Return 1 when it has data, 0 on timeout, negative on error. */
+int tcp_wait_readable(int handle, int ms);
+
+/* Milliseconds from some fixed time. */
+unsigned long long net_ms(void);
+
 /* Wait for one TCP client on port, read until it closes. Wii only.
  * Return the byte count, or a negative number. */
 int tcp_receive_once(int port, char *buf, int len, char *err, size_t errlen);

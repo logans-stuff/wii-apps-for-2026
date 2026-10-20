@@ -52,6 +52,7 @@ extern int sonoran_seed(unsigned char *out, unsigned int sz);
 #define HAVE_CURVE25519
 #define WC_RSA_PSS
 #define WC_RSA_BLINDING
+#define WOLFSSL_KEY_GEN      /* RSA key for the Discord QR login */
 #define WOLFSSL_SP_MATH_ALL
 #define WOLFSSL_HAVE_SP_RSA
 #define WOLFSSL_HAVE_SP_ECC

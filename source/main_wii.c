@@ -13,6 +13,9 @@
 
 #include "api.h"
 #include "map.h"
+#include "discord.h"
+#include "dc_qr.h"
+#include "qrcodegen.h"
 #include "https.h"
 #include "net.h"
 
@@ -33,7 +36,7 @@
 #define SEL "\x1b[44m"
 #define UNSEL "\x1b[40m"
 
-enum screen { SCR_CHAT, SCR_NODES, SCR_MAP, SCR_COUNT };
+enum screen { SCR_CHAT, SCR_NODES, SCR_MAP, SCR_DISCORD, SCR_COUNT };
 
 static void *xfb;
 static GXRModeObj *rmode;
@@ -47,6 +50,17 @@ static int chat_n, nodes_n;
 static struct map_node map_nodes[MAX_MAP_NODES];
 static int map_n;
 static enum screen cur_scr;
+
+/* Discord */
+#define DC_GUILDS 100
+#define DC_CHANS 200
+#define DC_MSGS 50
+static char dc_token[256];
+static struct dc_item dc_guild[DC_GUILDS], dc_chan[DC_CHANS];
+static struct dc_msg dc_msgs[DC_MSGS];
+static int dc_level;              /* 0 servers, 1 channels, 2 messages */
+static int dc_n[3], dc_sel[3], dc_top[3];
+static int dc_detail;
 /* Phoenix, the middle of the azmsh mesh */
 static struct map_view view = { 33.45, -112.07, 9 };
 static char status_line[512];
@@ -118,7 +132,8 @@ static void header(enum screen scr)
     printf(WHITE "Sonoran" GREY " - s.azmsh.dev   ");
     printf("%s[ Chat ]%s ", scr == SCR_CHAT ? YELLOW : GREY, GREY);
     printf("%s[ Nodes ]%s ", scr == SCR_NODES ? YELLOW : GREY, GREY);
-    printf("%s[ Map ]%s\n", scr == SCR_MAP ? YELLOW : GREY, GREY);
+    printf("%s[ Map ]%s ", scr == SCR_MAP ? YELLOW : GREY, GREY);
+    printf("%s[ Discord ]%s\n", scr == SCR_DISCORD ? YELLOW : GREY, GREY);
 }
 
 static void footer(void)
@@ -126,7 +141,9 @@ static void footer(void)
     printf("\x1b[%d;1H" GREY, rows);
     put_cut(status_line, cols);
     printf("\x1b[%d;1H", rows + 1);
-    if (cur_scr == SCR_MAP)
+    if (cur_scr == SCR_DISCORD)
+        put_cut("Up/Dn select  A open  B back  1 login/write  + reload  - screen  Home exit", cols);
+    else if (cur_scr == SCR_MAP)
         put_cut("D-Pad move  A zoom in  B zoom out  - screen  + reload  Home exit", cols);
     else
         put_cut("<-/-> or - screen  Up/Dn scroll  A open  B back  + reload  1 log in  2 pair", cols);
@@ -319,6 +336,16 @@ static void pair(void)
         }
         snprintf(token, sizeof(token), "%s", cookie);
         memset(cookie, 0, sizeof(cookie));
+    } else if (strcmp(line1, "DTOKEN") == 0 && line2 && strlen(line2) >= 20) {
+        FILE *f;
+        snprintf(dc_token, sizeof(dc_token), "%s", line2);
+        memset(got, 0, sizeof(got));
+        if ((f = fopen("sd:/apps/sonoran/discord.txt", "wb")) != NULL) {
+            fprintf(f, "%s\n", dc_token);
+            fclose(f);
+        }
+        snprintf(status_line, sizeof(status_line), "Discord token saved.");
+        return;
     } else if (strcmp(line1, "COOKIE") == 0 && line2 && strlen(line2) >= 16) {
         snprintf(token, sizeof(token), "%s", line2);
         memset(got, 0, sizeof(got));
@@ -503,6 +530,189 @@ static int login(void)
     return 1;
 }
 
+static void dc_load_token(void)
+{
+    FILE *f = fopen("sd:/apps/sonoran/discord.txt", "rb");
+    size_t n;
+
+    if (f == NULL)
+        return;
+    n = fread(dc_token, 1, sizeof(dc_token) - 1, f);
+    fclose(f);
+    dc_token[n] = '\0';
+    dc_token[strcspn(dc_token, "\r\n \t")] = '\0';
+}
+
+static void dc_refresh(void)
+{
+    char err[200];
+    int rc = DC_OK;
+
+    if (dc_token[0] == '\0') {
+        snprintf(status_line, sizeof(status_line),
+                 "Not logged in to Discord. Push 1 to log in with a QR code.");
+        return;
+    }
+    snprintf(status_line, sizeof(status_line), "Loading...");
+    footer();
+    if (dc_level == 0)
+        rc = dc_guilds(dc_token, dc_guild, DC_GUILDS, &dc_n[0], err, sizeof(err));
+    else if (dc_level == 1)
+        rc = dc_channels(dc_token, dc_guild[dc_sel[0]].id, dc_chan, DC_CHANS, &dc_n[1],
+                         err, sizeof(err));
+    else
+        rc = dc_messages(dc_token, dc_chan[dc_sel[1]].id, dc_msgs, DC_MSGS, &dc_n[2],
+                         err, sizeof(err));
+    if (rc == DC_OK)
+        snprintf(status_line, sizeof(status_line), "Discord OK");
+    else
+        snprintf(status_line, sizeof(status_line), "%s", err);
+}
+
+static void draw_discord(void)
+{
+    int i, line = 4, last = rows - 2, n = dc_n[dc_level];
+    int top = dc_top[dc_level], sel = dc_sel[dc_level];
+
+    header(SCR_DISCORD);
+    if (dc_level == 0)
+        printf(AT(2, 1) CYAN "Servers" GREY);
+    else if (dc_level == 1)
+        printf(AT(2, 1) CYAN "%s" GREY, dc_guild[dc_sel[0]].name);
+    else
+        printf(AT(2, 1) CYAN "%s  %s" GREY, dc_guild[dc_sel[0]].name, dc_chan[dc_sel[1]].name);
+
+    if (dc_level == 2 && dc_detail && n > 0) {
+        const struct dc_msg *m = &dc_msgs[sel];
+        printf(AT(4, 1) CYAN "From: " WHITE "%s\n" CYAN "Time: " WHITE "%s (Arizona)\n\n" GREY,
+               m->author, m->when);
+        wrap(m->text, cols - 4);
+        footer();
+        return;
+    }
+    if (dc_token[0] == '\0')
+        printf(AT(4, 1) "Push 1 to log in to Discord with a QR code.");
+    else if (n == 0)
+        printf(AT(4, 1) "Nothing loaded.");
+    for (i = top; i < n && line <= last; i++, line++) {
+        char row[480];
+        if (dc_level == 0)
+            snprintf(row, sizeof(row), "%s", dc_guild[i].name);
+        else if (dc_level == 1)
+            snprintf(row, sizeof(row), "%s", dc_chan[i].name);
+        else
+            snprintf(row, sizeof(row), "%s %-12.12s %s", dc_msgs[i].when + 6,
+                     dc_msgs[i].author, dc_msgs[i].text);
+        printf("\x1b[%d;1H%s", line, i == sel ? SEL WHITE : UNSEL GREY);
+        put_cut(row, cols);
+        printf(UNSEL);
+    }
+    footer();
+}
+
+/* Draw the QR code in the middle of the screen. */
+static void draw_qr(const char *text, const char *line1, const char *line2)
+{
+    static uint8_t qr[qrcodegen_BUFFER_LEN_MAX], tmp[qrcodegen_BUFFER_LEN_MAX];
+    int size, scale, quiet = 4, px, x0, y0, x, y;
+
+    printf(CLEAR AT(2, 1) WHITE "%s\n" GREY "%s\n", line1, line2);
+    if (!qrcodegen_encodeText(text, tmp, qr, qrcodegen_Ecc_MEDIUM, 1, 40,
+                              qrcodegen_Mask_AUTO, true)) {
+        printf(RED "QR code failed." GREY);
+        return;
+    }
+    size = qrcodegen_getSize(qr);
+    scale = (rmode->xfbHeight - 120) / (size + 2 * quiet);
+    if (scale > 8)
+        scale = 8;
+    if (scale < 2)
+        scale = 2;
+    px = (size + 2 * quiet) * scale;
+    x0 = (rmode->fbWidth - px) / 2;
+    y0 = 70 + (rmode->xfbHeight - 100 - px) / 2;
+    fb_rect(x0, y0, px, px, 1);
+    for (y = 0; y < size; y++)
+        for (x = 0; x < size; x++)
+            if (qrcodegen_getModule(qr, x, y))
+                fb_rect(x0 + (x + quiet) * scale, y0 + (y + quiet) * scale, scale, scale, 0);
+}
+
+/* Discord QR code login. Return 1 when a token was saved. */
+static int dc_qr_login(void)
+{
+    char qr[200] = "", user[80] = "", tok[256], err[200];
+    int st, done = 0;
+
+    printf(CLEAR AT(3, 1) WHITE "Discord login\n\n" GREY);
+    printf("  Making an RSA key and connecting to Discord.\n");
+    printf("  This can take up to one minute on the Wii...\n");
+    VIDEO_WaitVSync();
+    if (ra_start(err, sizeof(err)) != 0) {
+        ra_end();
+        snprintf(status_line, sizeof(status_line), "Discord: %s", err);
+        return 0;
+    }
+    printf("  Connected. Waiting for the QR code...\n");
+    for (;;) {
+        u32 down;
+        st = ra_poll(100, qr, sizeof(qr), user, sizeof(user), tok, sizeof(tok),
+                     err, sizeof(err));
+        if (st == RA_QR) {
+            draw_qr(qr, "Discord login: scan this with the Discord app on your phone",
+                    "(Phone: your profile > Scan QR Code.)  B or Home = cancel");
+        } else if (st == RA_SCANNED) {
+            printf(CLEAR AT(3, 1) WHITE "Discord login\n\n" GREY);
+            printf("  Scanned by: " YELLOW "%s\n\n" GREY, user);
+            printf("  Push \"Log in\" on your phone to allow it.\n");
+            printf("  B or Home = cancel\n");
+        } else if (st == RA_DONE) {
+            FILE *f;
+            snprintf(dc_token, sizeof(dc_token), "%s", tok);
+            memset(tok, 0, sizeof(tok));
+            mkdir("sd:/apps", 0777);
+            mkdir("sd:/apps/sonoran", 0777);
+            if ((f = fopen("sd:/apps/sonoran/discord.txt", "wb")) != NULL) {
+                fprintf(f, "%s\n", dc_token);
+                fclose(f);
+                snprintf(status_line, sizeof(status_line), "Discord: logged in as %s. Saved.", user);
+            } else {
+                snprintf(status_line, sizeof(status_line), "Discord: logged in as %s (not saved).", user);
+            }
+            done = 1;
+            break;
+        } else if (st == RA_ERROR || st == RA_CANCELLED) {
+            snprintf(status_line, sizeof(status_line), "Discord: %s", err);
+            break;
+        }
+        WPAD_ScanPads();
+        down = WPAD_ButtonsDown(0);
+        if (down & (WPAD_BUTTON_B | WPAD_BUTTON_HOME)) {
+            snprintf(status_line, sizeof(status_line), "Discord login cancelled.");
+            break;
+        }
+    }
+    ra_end();
+    return done;
+}
+
+static void dc_write(void)
+{
+    static char text[400];
+    char err[200];
+
+    text[0] = '\0';
+    if (!osk_input("Write a message (+ = send, Home = cancel)", text, sizeof(text), 0)
+        || text[0] == '\0') {
+        snprintf(status_line, sizeof(status_line), "Message not sent.");
+        return;
+    }
+    if (dc_send(dc_token, dc_chan[dc_sel[1]].id, text, err, sizeof(err)) == DC_OK)
+        snprintf(status_line, sizeof(status_line), "Message sent.");
+    else
+        snprintf(status_line, sizeof(status_line), "%s", err);
+}
+
 static void draw_map(void)
 {
     int near;
@@ -537,12 +747,13 @@ int main(int argc, char **argv)
     /* Map area: below text row 1, above the two footer rows. */
     map_setup(xfb, rmode->fbWidth, rmode->xfbHeight, 20 + 16 + 4, 20 + 16 * (rows - 1) - 4);
 
-    printf(CLEAR AT(2, 1) WHITE "Sonoran for Wii 0.2\n\n" GREY);
+    printf(CLEAR AT(2, 1) WHITE "Sonoran for Wii 0.3\n\n" GREY);
     /* Without a token the app still starts. The server then answers
      * with a login redirect, and the status line says so. */
     if (!load_token(argc > 0 ? argv[0] : NULL))
         printf("Not logged in yet. Push 1 to log in.\n");
 
+    dc_load_token();
     printf("Starting the network...\n");
     if (net_start(err, sizeof(err)) != 0 || (dbg("start: token %s",
             token[0] ? "present" : "none"), https_init(err, sizeof(err))) != 0) {
@@ -561,7 +772,11 @@ int main(int argc, char **argv)
         int count, page = rows - 4;
 
         cur_scr = scr;
-        if (!loaded[scr]) {
+        if (!loaded[scr] && scr == SCR_DISCORD) {
+            dc_refresh();
+            loaded[scr] = 1;
+            redraw = 1;
+        } else if (!loaded[scr]) {
             refresh(scr);
             loaded[scr] = 1;
             redraw = 1;
@@ -570,7 +785,9 @@ int main(int argc, char **argv)
             count = scr == SCR_CHAT ? chat_n : nodes_n;
             if (scr != SCR_MAP && sel[scr] >= count)
                 sel[scr] = count > 0 ? count - 1 : 0;
-            if (scr == SCR_MAP) {
+            if (scr == SCR_DISCORD) {
+                draw_discord();
+            } else if (scr == SCR_MAP) {
                 draw_map();
             } else if (detail && count > 0) {
                 if (scr == SCR_CHAT)
@@ -592,6 +809,58 @@ int main(int argc, char **argv)
             entropy_add(down);
         if (down & WPAD_BUTTON_HOME)
             break;
+
+        if (scr == SCR_DISCORD) {
+            int n = dc_n[dc_level], page = rows - 5;
+            if (down & (WPAD_BUTTON_MINUS | WPAD_BUTTON_LEFT | WPAD_BUTTON_RIGHT)) {
+                int step = (down & WPAD_BUTTON_LEFT) ? SCR_COUNT - 1 : 1;
+                scr = (enum screen)((scr + step) % SCR_COUNT);
+                redraw = 1;
+            } else if (down & WPAD_BUTTON_1) {
+                if (dc_token[0] != '\0' && dc_level == 2) {
+                    dc_write();
+                    loaded[scr] = 0;
+                } else if (dc_qr_login()) {
+                    dc_level = 0;
+                    loaded[scr] = 0;
+                }
+                redraw = 1;
+            } else if (down & WPAD_BUTTON_2) {
+                pair();
+                memset(loaded, 0, sizeof(loaded));
+            } else if (down & WPAD_BUTTON_PLUS) {
+                dc_detail = 0;
+                loaded[scr] = 0;
+            } else if (down & WPAD_BUTTON_A) {
+                if (dc_level == 2) {
+                    dc_detail = n > 0;
+                } else if (n > 0) {
+                    dc_level++;
+                    dc_sel[dc_level] = dc_top[dc_level] = 0;
+                    loaded[scr] = 0;
+                }
+                redraw = 1;
+            } else if (down & WPAD_BUTTON_B) {
+                if (dc_detail)
+                    dc_detail = 0;
+                else if (dc_level > 0)
+                    dc_level--;
+                redraw = 1;
+            } else if (!dc_detail && (down & (WPAD_BUTTON_UP | WPAD_BUTTON_DOWN))) {
+                int *sl = &dc_sel[dc_level], *tp = &dc_top[dc_level];
+                *sl += (down & WPAD_BUTTON_DOWN) ? 1 : -1;
+                if (*sl < 0)
+                    *sl = 0;
+                if (*sl >= n)
+                    *sl = n > 0 ? n - 1 : 0;
+                if (*sl < *tp)
+                    *tp = *sl;
+                if (*sl >= *tp + page)
+                    *tp = *sl - page + 1;
+                redraw = 1;
+            }
+            continue;
+        }
 
         if (scr == SCR_MAP) {
             int step_x = rmode->fbWidth / 4, step_y = (rows * 16) / 4;

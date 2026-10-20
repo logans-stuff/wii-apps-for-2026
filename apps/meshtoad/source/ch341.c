@@ -10,6 +10,7 @@
 #include <malloc.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <gccore.h>
 #include <ogc/usb.h>
@@ -128,7 +129,7 @@ int ch341_open(int cs_pin, unsigned out_mask, char *info, size_t infolen, char *
 {
     static usb_device_entry list[16];
     u8 cnt = 0;
-    int i;
+    int i, tries;
 
     ch341_close();
     if (iobuf == NULL)
@@ -138,21 +139,29 @@ int ch341_open(int cs_pin, unsigned out_mask, char *info, size_t infolen, char *
         return -1;
     }
     USB_Initialize();
-    if (USB_GetDeviceList(list, 16, 0, &cnt) < 0)
+    /* The CH341 may still be enumerating when we start, so wait for it. */
+    for (tries = 0; tries < 25 && !is_open; tries++) {
         cnt = 0;
-    for (i = 0; i < cnt; i++) {
-        if (list[i].vid != 0x1a86 || list[i].pid != 0x5512)
-            continue;
-        if (USB_OpenDevice(list[i].device_id, list[i].vid, list[i].pid, &fd) >= 0) {
-            is_open = 1;
-            snprintf(info, infolen, "CH341 1a86:5512 (device %08x)", (unsigned)list[i].device_id);
-            dbg("ch341 open ok: device_id=%08x fd=%d", (unsigned)list[i].device_id, (int)fd);
-            break;
+        if (USB_GetDeviceList(list, 16, 0, &cnt) < 0)
+            cnt = 0;
+        for (i = 0; i < cnt; i++) {
+            if (list[i].vid != 0x1a86 || list[i].pid != 0x5512)
+                continue;
+            if (USB_OpenDevice(list[i].device_id, list[i].vid, list[i].pid, &fd) >= 0) {
+                is_open = 1;
+                snprintf(info, infolen, "CH341 1a86:5512 (device %08x)",
+                         (unsigned)list[i].device_id);
+                dbg("ch341 open ok: device_id=%08x fd=%d (try %d)",
+                    (unsigned)list[i].device_id, (int)fd, tries);
+                break;
+            }
+            dbg("ch341 open failed for device_id=%08x", (unsigned)list[i].device_id);
         }
-        dbg("ch341 open failed for device_id=%08x", (unsigned)list[i].device_id);
+        if (!is_open)
+            usleep(200 * 1000); /* 200 ms, up to ~5 s total */
     }
     if (!is_open) {
-        snprintf(err, errlen, "no CH341 (1a86:5512) found");
+        snprintf(err, errlen, "no CH341 (1a86:5512) found (is the Meshtoad plugged in?)");
         return -1;
     }
     cs = cs_pin;

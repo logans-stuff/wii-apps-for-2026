@@ -16,8 +16,6 @@
 #include "net.h"
 #include "usbaudio.h"
 
-#define ISO_MAX 32
-
 struct stream {
     int iface, alt, ep, maxpkt, channels, bits;
 };
@@ -27,8 +25,6 @@ struct stream {
 static s32 fd, mic_fd, spk_fd;      /* control; one IOS device per interface */
 static int fd_open, mic_open, spk_open;
 static struct stream mic, spk;
-static u8 *iso_buf;
-static u16 *iso_sizes;
 
 /* Walk the configuration descriptor and find the two streams. */
 static void parse_config(const u8 *b, int n)
@@ -72,10 +68,10 @@ static int set_alt(s32 dev, int alt)
     return USBV5_SetAlternateSetting(dev, (u8)alt);
 }
 
-/* Interface number of one IOS device entry, or -1. */
 int ua_play(const int16_t *in, int samples);
 int ua_record(int16_t *out, int max_samples, int (*keep_going)(void));
 
+/* Interface number of one IOS device entry, or -1. */
 static int iface_of(s32 dev)
 {
     usb_devdesc udd;
@@ -103,11 +99,8 @@ int ua_open(char *info, size_t infolen, char *err, size_t errlen)
         return -1;
     }
     cfg = memalign(32, 1024);
-    iso_buf = memalign(32, ISO_MAX * 512);
-    iso_sizes = memalign(32, 2 * ISO_MAX + 32);
-    if (cfg == NULL || iso_buf == NULL || iso_sizes == NULL) {
+    if (cfg == NULL) {
         snprintf(err, errlen, "out of memory");
-        free(cfg);
         return -1;
     }
     for (i = 0; i < cnt && !fd_open; i++) {
@@ -242,17 +235,33 @@ static int queue_ready(void)
             q[i].sizes = memalign(32, 32);
         if (q[i].buf == NULL || q[i].sizes == NULL)
             return -1;
-        q[i].busy = 0;
+        /* A transfer that timed out can still belong to IOS. Do not take
+         * its buffer back by force. */
+        if (q[i].busy) {
+            dbg("ua: transfer %d still busy, not starting", i);
+            return -1;
+        }
     }
     return 0;
 }
 
-static void wait_xfer(struct xfer *x)
+/* Return 0 when the transfer is done, -1 when it is still busy after 1 s
+ * (then IOS still owns its buffer). */
+static int wait_xfer(struct xfer *x)
 {
     unsigned long long t0 = net_ms();
 
     while (x->busy && net_ms() - t0 < 1000)
         usleep(200);
+    return x->busy ? -1 : 0;
+}
+
+static void wait_all(void)
+{
+    int i;
+
+    for (i = 0; i < QDEPTH; i++)
+        wait_xfer(&q[i]);
 }
 
 static s32 submit_read(struct xfer *x, int bytes)
@@ -264,26 +273,40 @@ static s32 submit_read(struct xfer *x, int bytes)
     DCFlushRange(x->sizes, 32);
     DCInvalidateRange(x->buf, QPKTS * 512);
     x->busy = 1;
-    return USB_ReadIsoMsgAsync(mic_fd, (u8)mic.ep, QPKTS, x->sizes, x->buf, xfer_done, x);
+    if (USB_ReadIsoMsgAsync(mic_fd, (u8)mic.ep, QPKTS, x->sizes, x->buf, xfer_done, x) < 0) {
+        x->busy = 0;   /* no callback comes for a refused call */
+        x->result = -1; /* so the old data is not used again */
+        return -1;
+    }
+    return 0;
 }
 
 int ua_record(int16_t *out, int max_samples, int (*keep_going)(void))
 {
     int frame = UA_RATE / 1000, got = 0, i, k = 0;
     int bytes = frame * (mic.bits / 8) * mic.channels;
-    int chunk = frame * QPKTS, stop = 0;
+    int chunk = frame * QPKTS, stop = 0, errors = 0;
 
     if (!fd_open || mic.ep == 0 || bytes <= 0 || bytes > 512 || queue_ready() != 0)
         return -1;
     for (i = 0; i < QDEPTH; i++)
-        if (submit_read(&q[i], bytes) < 0)
-            q[i].busy = 0;
+        submit_read(&q[i], bytes);
     for (;;) {
         struct xfer *x = &q[k];
         int p, s;
 
-        wait_xfer(x);
+        if (wait_xfer(x) != 0) {
+            dbg("ua: mic transfer timed out");
+            wait_all();
+            return got > 0 ? got : -1;
+        }
+        if (x->result < 0 && ++errors >= 10) {
+            /* Stop, also without keep_going (the warm-up), or it never ends. */
+            dbg("ua: mic transfers fail (%d)", (int)x->result);
+            stop = 1;
+        }
         if (x->result >= 0 && got + chunk <= max_samples && !stop) {
+            errors = 0;
             DCInvalidateRange(x->sizes, 32);
             DCInvalidateRange(x->buf, QPKTS * 512);
             for (p = 0; p < QPKTS; p++) {
@@ -301,8 +324,7 @@ int ua_record(int16_t *out, int max_samples, int (*keep_going)(void))
             stop = 1;
         if (stop) {
             /* let the others finish, then return */
-            for (i = 0; i < QDEPTH; i++)
-                wait_xfer(&q[i]);
+            wait_all();
             return got;
         }
         k = (k + 1) % QDEPTH;
@@ -335,7 +357,7 @@ int ua_play(const int16_t *in, int samples)
 
 static int play_raw(const int16_t *in, int samples)
 {
-    int frame = UA_RATE / 1000, done = 0, k = 0, i;
+    int frame = UA_RATE / 1000, done = 0, k = 0;
     int bytes = frame * (spk.bits / 8) * spk.channels;
     int chunk = frame * QPKTS;
 
@@ -346,7 +368,11 @@ static int play_raw(const int16_t *in, int samples)
         u8 *dst;
         int p, s, c;
 
-        wait_xfer(x);
+        if (wait_xfer(x) != 0) {
+            dbg("ua: headphone transfer timed out");
+            wait_all();
+            return -1;
+        }
         dst = x->buf;
         for (p = 0; p < QPKTS; p++) {
             x->sizes[p] = (u16)bytes;
@@ -363,12 +389,12 @@ static int play_raw(const int16_t *in, int samples)
         x->busy = 1;
         if (USB_WriteIsoMsgAsync(spk_fd, (u8)spk.ep, QPKTS, x->sizes, x->buf, xfer_done, x) < 0) {
             x->busy = 0;
+            wait_all();
             return -1;
         }
         done += chunk;
         k = (k + 1) % QDEPTH;
     }
-    for (i = 0; i < QDEPTH; i++)
-        wait_xfer(&q[i]);
+    wait_all();
     return 0;
 }

@@ -2,6 +2,7 @@
  * with a GRRLIB graphical UI. Listens, decodes, keeps a NodeDB, transmits.
  * Controls: D-Pad up/down scroll/select, 1 = Nodes/Messages, A = type a
  * message, 2 = quick chat, B = announce, Home = exit. */
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -34,7 +35,7 @@ static GRRLIB_ttfFont *FONT;
 #define C_GOOD   0x7FE08BFF
 #define C_WARN   0xF0C05AFF
 
-enum { VIEW_NODES, VIEW_MESSAGES };
+enum { VIEW_NODES, VIEW_MESSAGES, VIEW_MAP, VIEW_COUNT };
 
 #define SCR_W 640
 #define SCR_H 480
@@ -171,8 +172,10 @@ static void draw_header(int view, long rx, long tx, long crc)
     if (view == VIEW_NODES)
         snprintf(cnt, sizeof(cnt), "Nodes %d/%d",
                  nodedb_count() ? node_sel + 1 : 0, nodedb_count());
-    else
+    else if (view == VIEW_MESSAGES)
         snprintf(cnt, sizeof(cnt), "Messages %d", msg_count);
+    else
+        snprintf(cnt, sizeof(cnt), "Map");
     w = FONT ? GRRLIB_WidthTTF(FONT, cnt, 15) : 0;
     text(SCR_W - w - 12, 8, 15, C_DIM, "%s", cnt);
 }
@@ -230,14 +233,68 @@ static void draw_messages(void)
     }
 }
 
+static void draw_map(void)
+{
+    int count = nodedb_count(), i, np = 0;
+    double minla = 1e9, maxla = -1e9, minlo = 1e9, maxlo = -1e9, cla, clo, dla, dlo;
+    int mx = 16, my = 60, mw = SCR_W - 32, mh = SCR_H - 60 - 30;
+
+    for (i = 0; i < count; i++) {
+        const struct node *nd = nodedb_get(i);
+        if (nd == NULL || !nd->has_pos)
+            continue;
+        np++;
+        if (nd->lat < minla) minla = nd->lat;
+        if (nd->lat > maxla) maxla = nd->lat;
+        if (nd->lon < minlo) minlo = nd->lon;
+        if (nd->lon > maxlo) maxlo = nd->lon;
+    }
+    if (np == 0) {
+        text(40, 210, 22, C_DIM, "No node positions yet.");
+        text(40, 242, 16, C_DIM, "Nodes that broadcast GPS will plot here.");
+        return;
+    }
+    dla = maxla - minla;
+    dlo = maxlo - minlo;
+    if (dla < 0.0005) dla = 0.0005;
+    if (dlo < 0.0005) dlo = 0.0005;
+    cla = (minla + maxla) / 2;
+    clo = (minlo + maxlo) / 2;
+
+    GRRLIB_Rectangle(mx, my, mw, mh, C_ROW, 0);
+    text(mx + 4, 32, 14, C_DIM, "~%.1f x %.1f km   %d located",
+         dla * 111.0, dlo * 111.0 * cos(cla * 3.14159265 / 180.0), np);
+
+    for (i = 0; i < count; i++) {
+        const struct node *nd = nodedb_get(i);
+        int px, py, r;
+        u32 col;
+        if (nd == NULL || !nd->has_pos)
+            continue;
+        px = mx + (int)((nd->lon - (clo - dlo * 0.6)) / (dlo * 1.2) * mw);
+        py = my + (int)(((cla + dla * 0.6) - nd->lat) / (dla * 1.2) * mh);
+        if (px < mx + 2) px = mx + 2;
+        if (px > mx + mw - 2) px = mx + mw - 2;
+        if (py < my + 2) py = my + 2;
+        if (py > my + mh - 2) py = my + mh - 2;
+        col = (i == node_sel) ? C_WARN : C_ACC;
+        r = (i == node_sel) ? 6 : 4;
+        GRRLIB_Rectangle(px - r, py - r, r * 2, r * 2, col, 1);
+        text(px + 8, py - 9, 15, i == node_sel ? C_TEXT : C_DIM, "%-4.4s",
+             nd->has_name ? nd->short_name : "----");
+    }
+}
+
 static void draw_ui(int view, long rx, long tx, long crc)
 {
     GRRLIB_FillScreen(C_BG);
     draw_header(view, rx, tx, crc);
     if (view == VIEW_NODES)
         draw_nodes();
-    else
+    else if (view == VIEW_MESSAGES)
         draw_messages();
+    else
+        draw_map();
     GRRLIB_Rectangle(0, SCR_H - 26, SCR_W, 26, C_BAR, 1);
     text(10, SCR_H - 22, 16, C_DIM,
          "up/down scroll   1 view   A type   2 quick   B announce   Home exit");
@@ -355,19 +412,19 @@ int main(void)
         if (down & WPAD_BUTTON_HOME)
             break;
         if (down & WPAD_BUTTON_UP) {
-            if (view == VIEW_NODES)
-                node_sel--;
-            else
+            if (view == VIEW_MESSAGES)
                 msg_top--;
+            else
+                node_sel--;
         }
         if (down & WPAD_BUTTON_DOWN) {
-            if (view == VIEW_NODES)
-                node_sel++;
-            else
+            if (view == VIEW_MESSAGES)
                 msg_top++;
+            else
+                node_sel++;
         }
         if (down & WPAD_BUTTON_1)
-            view = view == VIEW_NODES ? VIEW_MESSAGES : VIEW_NODES;
+            view = (view + 1) % VIEW_COUNT;
         if (down & WPAD_BUTTON_A) {
             char msg[120] = "";
             if (gfx_osk("Type a message:", msg, sizeof(msg)) && msg[0]) {

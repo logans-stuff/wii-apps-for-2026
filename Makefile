@@ -14,6 +14,22 @@ OBJ := $(patsubst %.c,build/obj/%.o,$(SRC))
 build/boot.dol: build/sonoran.elf
 	elf2dol $< $@
 
+# USB probe for the headset driver: make build/probe.dol
+PROBE_OBJ := build/obj/source/usbprobe.o build/obj/source/net_wii.o \
+  $(filter build/obj/third_party/wolfssl/%,$(OBJ))
+build/probe.elf: $(PROBE_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $(PROBE_OBJ) $(LIBS)
+build/probe.dol: build/probe.elf
+	elf2dol $< $@
+
+# Headset test: make build/headset.dol
+HEADSET_OBJ := build/obj/source/headset.o build/obj/source/usbaudio.o build/obj/source/net_wii.o \
+  $(filter build/obj/third_party/wolfssl/%,$(OBJ))
+build/headset.elf: $(HEADSET_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $(HEADSET_OBJ) $(LIBS)
+build/headset.dol: build/headset.elf
+	elf2dol $< $@
+
 build/sonoran.elf: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)
 

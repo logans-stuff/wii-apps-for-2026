@@ -1,0 +1,26 @@
+# Meshtoad config. Copy this to  sd:/apps/meshtoad/config.txt  and edit.
+# Each line is  key = value ; '#' starts a comment. Anything you leave out
+# keeps its default (shown here), so you only need the lines you change.
+
+# --- Node identity (how the Wii appears on the mesh) ---
+name  = Wii
+short = Wii
+# id  = !57494921     # node number in hex; default is fixed
+
+# --- Channel ---
+# Either give a preset + frequency slot, or set the radio values directly.
+preset = mediumfast    # shortturbo shortfast shortslow mediumfast mediumslow
+                       # longfast longmoderate longslow
+slot   = 18            # US 902-928 MHz frequency slot (1-based)
+# freq = 906375000     # ...or the frequency in Hz directly (overridden by slot)
+# sf   = 9             # spreading factor (preset sets this)
+# bw   = 250           # bandwidth kHz   (preset sets this)
+# cr   = 5             # coding rate 4/5
+# sync = 0x2b
+
+channel = 0x1f         # channel hash (the byte seen in received packets)
+
+# --- Channel key (PSK), base64 ---
+# Omit, or use "AQ==", for the public default channel key. For a private
+# channel paste its 16- or 32-byte key in base64 (from the channel's QR/URL).
+# key = 1PG7OiApB1nwvP+rz05pAQ==

@@ -15,16 +15,10 @@
 #include "meshtastic.h"
 #include "nodedb.h"
 #include "osk.h"
+#include "config.h"
 
-/* Meshtastic US MediumFast, frequency slot 18: SF9, BW250, CR4/5, sync 0x2B. */
-static const struct lora_cfg US_MEDIUMFAST = {
-    906375000U, 9, 250, 5, 0x2B, 16
-};
-
-#define WII_NODE 0x57494921u    /* shows as !57494921 */
-#define WII_LONG "Wii"
-#define WII_SHORT "Wii"
-#define CHAN_HASH 0x1f
+/* Loaded from sd:/apps/meshtoad/config.txt, else sensible defaults. */
+static struct mesh_config CFG;
 
 enum { VIEW_NODES, VIEW_MESSAGES };
 
@@ -155,10 +149,10 @@ static void render_nodes(void)
 static void redraw_all(const char *info, int view, long rx, long crc, long tx)
 {
     printf("\x1b[2J");
-    printf("\x1b[2;1HSonoran LoRa node  (!%08x \"%s\")\n", WII_NODE, WII_LONG);
+    printf("\x1b[2;1HSonoran LoRa node  (!%08x \"%s\")\n", CFG.node_id, CFG.long_name);
     printf("\x1b[3;1HRadio: %s\n", info);
     printf("\x1b[4;1H%u Hz SF%d BW%d ch %02x  up/down scroll 1=view A=type 2=quick B=ann Home=exit\n",
-           US_MEDIUMFAST.freq_hz, US_MEDIUMFAST.sf, US_MEDIUMFAST.bw_khz, CHAN_HASH);
+           CFG.lora.freq_hz, CFG.lora.sf, CFG.lora.bw_khz, CFG.channel_hash);
     printf("\x1b[8;1Hrx %ld  crc %ld  tx %ld\n", rx, crc, tx);
     if (view == VIEW_NODES)
         render_nodes();
@@ -177,7 +171,7 @@ static void send_text(const char *msg)
 {
     uint8_t frame[256];
     char line[72];
-    int flen = mesh_encode_text(WII_NODE, 0xffffffffu, next_id(), CHAN_HASH, msg,
+    int flen = mesh_encode_text(CFG.node_id, 0xffffffffu, next_id(), CFG.channel_hash, msg,
                                 frame, sizeof(frame));
     int rc = flen > 0 ? sx_send(frame, flen) : -1;
     snprintf(line, sizeof(line), "TX text \"%s\" %s", msg, rc == 0 ? "sent" : "FAILED");
@@ -189,10 +183,10 @@ static void send_nodeinfo(void)
 {
     uint8_t frame[256];
     char line[72];
-    int flen = mesh_encode_nodeinfo(WII_NODE, next_id(), CHAN_HASH, WII_LONG,
-                                    WII_SHORT, frame, sizeof(frame));
+    int flen = mesh_encode_nodeinfo(CFG.node_id, next_id(), CFG.channel_hash, CFG.long_name,
+                                    CFG.short_name, frame, sizeof(frame));
     int rc = flen > 0 ? sx_send(frame, flen) : -1;
-    snprintf(line, sizeof(line), "TX nodeinfo \"%s\" %s", WII_LONG, rc == 0 ? "sent" : "FAILED");
+    snprintf(line, sizeof(line), "TX nodeinfo \"%s\" %s", CFG.long_name, rc == 0 ? "sent" : "FAILED");
     log_add(line);
     dbg("lora: TX nodeinfo rc=%d len=%d", rc, flen);
 }
@@ -218,7 +212,10 @@ int main(void)
     video_start();
     WPAD_Init();
     nodedb_reset();
-    printf("\x1b[2;1HSonoran LoRa node  (!%08x \"%s\")\n", WII_NODE, WII_LONG);
+    config_load(&CFG);               /* sd:/apps/meshtoad/config.txt, else defaults */
+    mesh_set_key(CFG.key, CFG.keylen);
+    printf("\x1b[2;1HSonoran LoRa node  (!%08x \"%s\", %s)\n",
+           CFG.node_id, CFG.long_name, CFG.source);
     if (net_start(err, sizeof(err)) != 0)
         printf("network: %s (no log)\n", err);
     dbg("lora: start");
@@ -231,14 +228,14 @@ int main(void)
     printf("Radio: %s\n", info);
     dbg("lora: %s", info);
 
-    if (sx_start_rx(&US_MEDIUMFAST) != 0) {
+    if (sx_start_rx(&CFG.lora) != 0) {
         printf("Receive start failed.\n\nPush Home to exit.\n");
         dbg("lora: start_rx failed");
         sx_close();
         return wait_home();
     }
-    dbg("lora: listening %u Hz sf%d bw%d ch=%02x", US_MEDIUMFAST.freq_hz,
-        US_MEDIUMFAST.sf, US_MEDIUMFAST.bw_khz, CHAN_HASH);
+    dbg("lora: listening %u Hz sf%d bw%d ch=%02x", CFG.lora.freq_hz,
+        CFG.lora.sf, CFG.lora.bw_khz, CFG.channel_hash);
 
     send_nodeinfo(); /* announce so the Wii shows up on the mesh */
     redraw_all(info, view, packets, crc_errors, sent);

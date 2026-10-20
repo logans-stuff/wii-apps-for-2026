@@ -17,3 +17,4 @@ local.mk
 dist/apps/meshtoad/boot.dol
 tools/meshtoad-installer/source/install_data.h
 common/font_dejavu.h
+tools/maptiles/tiles/

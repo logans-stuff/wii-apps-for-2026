@@ -1,7 +1,7 @@
-/* One-shot installer: writes the Meshtoad app (boot.dol, meta.xml, icon.png)
- * to sd:/apps/meshtoad/ so it can be launched from the Homebrew Channel
- * without wiiload. Send it once with wiiload; it does the rest. */
+/* One-shot installer: writes the Meshtoad app and offline map tiles to
+ * sd:/apps/meshtoad/. Send it once with wiiload; it does the rest. */
 #include <stdio.h>
+#include <string.h>
 
 #include <fat.h>
 #include <gccore.h>
@@ -32,36 +32,45 @@ int main(void)
 
     video_start();
     WPAD_Init();
-    printf("\x1b[2;1HMeshtoad installer\n\n");
+    printf("\x1b[2;1HMeshtoad installer\n");
+    printf("%u files, %u KiB payload\n\n",
+           (unsigned)INSTALL_NFILES, (unsigned)(INSTALL_TOTAL_BYTES / 1024));
 
     if (!fatInitDefault()) {
         printf("No SD card found. Push Home to exit.\n");
         goto wait;
     }
-    mkdir("sd:/apps", 0777);
-    mkdir("sd:/apps/meshtoad", 0777);
-
     for (i = 0; i < INSTALL_NFILES; i++) {
-        char path[64];
+        char path[128], dir[128];
+        char *slash, *p;
         FILE *f;
         size_t n = 0;
         snprintf(path, sizeof(path), "sd:/apps/meshtoad/%s", INSTALL_FILES[i].name);
+        /* Create every parent directory of this file (e.g. tiles/13/1490). */
+        snprintf(dir, sizeof(dir), "%s", path);
+        slash = strrchr(dir, '/');
+        if (slash != NULL) {
+            *slash = '\0';
+            for (p = dir + 4; *p; p++) /* skip "sd:/" */
+                if (*p == '/') { *p = '\0'; mkdir(dir, 0777); *p = '/'; }
+            mkdir(dir, 0777);
+        }
         f = fopen(path, "wb");
         if (f != NULL) {
             n = fwrite(INSTALL_FILES[i].data, 1, INSTALL_FILES[i].len, f);
             fclose(f);
         }
-        if (n == INSTALL_FILES[i].len) {
+        if (n == INSTALL_FILES[i].len)
             ok++;
-            printf("  wrote %-10s (%u bytes)\n", INSTALL_FILES[i].name,
-                   (unsigned)INSTALL_FILES[i].len);
-        } else {
-            printf("  FAILED %-10s\n", INSTALL_FILES[i].name);
+        else
+            printf("  FAILED %s\n", INSTALL_FILES[i].name);
+        if ((i % 20) == 0 || i == INSTALL_NFILES - 1) {
+            printf("\x1b[6;1H  installing... %d / %d files   ", i + 1, INSTALL_NFILES);
         }
     }
 
-    printf("\n%s. Meshtoad is now in the Homebrew Channel.\n",
-           ok == INSTALL_NFILES ? "Done" : "Some files failed");
+    printf("\n\n%s. %d files written to sd:/apps/meshtoad/.\n",
+           ok == INSTALL_NFILES ? "Done" : "Some files failed", ok);
 wait:
     printf("\nPush Home to exit.\n");
     for (;;) {

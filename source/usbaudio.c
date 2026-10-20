@@ -73,6 +73,7 @@ static int set_alt(s32 dev, int alt)
 
 /* Interface number of one IOS device entry, or -1. */
 int ua_play(const int16_t *in, int samples);
+int ua_record(int16_t *out, int max_samples, int (*keep_going)(void));
 
 static int iface_of(s32 dev)
 {
@@ -168,6 +169,14 @@ int ua_open(char *info, size_t infolen, char *err, size_t errlen)
      * A headset that stays on with no data can buzz. The first playback
      * after power-on is slow and broken (measured: 2.4 s of sound took
      * 5.6 s), so play 300 ms of silence once here as a warm-up. */
+    /* The first recording after power-on is silent (measured: peak 0),
+     * so record 300 ms once here as a warm-up too. */
+    if (mic.ep) {
+        static int16_t mwarm[48 * 320];
+        unsigned long long t0 = net_ms();
+        int n = ua_record(mwarm, 48 * 320, NULL);
+        dbg("ua: mic warm-up %d samples in %llu ms", n, net_ms() - t0);
+    }
     if (spk.ep) {
         static int16_t warm[48 * 300];
         unsigned long long t0 = net_ms();

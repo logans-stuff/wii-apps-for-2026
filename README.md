@@ -34,7 +34,12 @@ Linux test of the same TLS and API code:
 Copy `dist/apps/sonoran/` and `build/boot.dol` to `sd:/apps/sonoran/`.
 Or send it with wiiload while the Homebrew Channel is open:
 
-    WIILOAD=tcp:<wii-ip> wiiload build/boot.dol
+    WIILOAD=tcp:<wii-ip> wiiload build/boot.dol      # run once, no install
+
+To install over the network, send a zip with the app folder at the top
+(`sonoran/boot.dol`, `sonoran/meta.xml`, `sonoran/icon.png`). The
+Homebrew Channel refuses a zip with `apps/sonoran/...` paths ("not a
+usable zip file"). It extracts the good layout to `sd:/apps/sonoran/`.
 
 ## Login token
 

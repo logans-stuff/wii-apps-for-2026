@@ -70,6 +70,8 @@ int sonoran_seed(unsigned char *out, unsigned int sz)
     return 0;
 }
 
+static int g_net_up; /* dbg() and net_stop() only act when the net came up */
+
 int net_start(char *err, size_t errlen)
 {
     s32 ret;
@@ -79,8 +81,10 @@ int net_start(char *err, size_t errlen)
     for (tries = 0; tries < 10; tries++) {
         ret = net_init();
         entropy_add((unsigned long long)ret);
-        if (ret == 0)
+        if (ret == 0) {
+            g_net_up = 1;
             return 0;
+        }
         if (ret != -EAGAIN)
             break;
         usleep(500 * 1000);
@@ -95,7 +99,10 @@ int net_start(char *err, size_t errlen)
  * the console is rebooted. */
 void net_stop(void)
 {
-    net_deinit();
+    if (g_net_up) {
+        net_deinit();
+        g_net_up = 0;
+    }
 }
 
 int tcp_open(const char *host, int port, char *err, size_t errlen)
@@ -204,6 +211,8 @@ void dbg(const char *fmt, ...)
     s32 fd;
     int n;
 
+    if (!g_net_up)
+        return; /* no network: logging is off, do nothing */
     n = snprintf(line, sizeof(line), "[%llu] ", (unsigned long long)ticks_to_millisecs(gettime()));
     va_start(ap, fmt);
     n += vsnprintf(line + n, sizeof(line) - n, fmt, ap);

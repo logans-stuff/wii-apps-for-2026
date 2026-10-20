@@ -221,7 +221,11 @@ int main(void)
         nodedb_load(NODEDB_PATH), nodedb_count());
     printf("\x1b[2;1HSonoran LoRa node  (!%08x \"%s\", %s)\n",
            CFG.node_id, CFG.long_name, CFG.source);
-    if (net_start(err, sizeof(err)) != 0)
+    /* Networking exists only for the remote debug log, and using Wi-Fi upsets
+     * the Homebrew Channel's own connection. So skip it entirely unless this
+     * build has a real DEBUG_HOST (set via local.mk); the public default is
+     * loopback, meaning logging off and Wi-Fi untouched. */
+    if (strcmp(DEBUG_HOST, "127.0.0.1") != 0 && net_start(err, sizeof(err)) != 0)
         printf("network: %s (no log)\n", err);
     dbg("lora: start");
 

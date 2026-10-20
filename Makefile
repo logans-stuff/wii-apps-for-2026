@@ -23,7 +23,7 @@ build/probe.dol: build/probe.elf
 	elf2dol $< $@
 
 # Headset test: make build/headset.dol
-HEADSET_OBJ := build/obj/source/headset.o build/obj/source/usbaudio.o build/obj/source/net_wii.o \
+HEADSET_OBJ := build/obj/source/headset.o build/obj/source/usbaudio.o build/obj/source/ogc_usb.o build/obj/source/net_wii.o \
   $(filter build/obj/third_party/wolfssl/%,$(OBJ))
 build/headset.elf: $(HEADSET_OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(HEADSET_OBJ) $(LIBS)
@@ -32,6 +32,12 @@ build/headset.dol: build/headset.elf
 
 build/sonoran.elf: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LIBS)
+
+# Our copy of libogc's usb.c needs libogc's own headers.
+LIBOGC_SRC := third_party/libogc
+build/obj/source/ogc_usb.o: source/ogc_usb.c
+	@mkdir -p $(dir $@)
+	$(CC) -O2 $(MACHDEP) -DHW_RVL -I$(LIBOGC_SRC)/gc -I$(LIBOGC_SRC)/libogc -I$(LIBOGC_SRC)/gc/ogc -I$(LIBOGC_SRC)/gc/ogc/machine -c -o $@ $<
 
 build/obj/%.o: %.c include/user_settings.h source/cacerts.h
 	@mkdir -p $(dir $@)

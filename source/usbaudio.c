@@ -59,28 +59,15 @@ static void parse_config(const u8 *b, int n)
     }
 }
 
-/* Set the alternate setting through IOS (USBV5 IOCTL 7 on /dev/usb/ven):
- * IOS must know the setting, or it refuses iso transfers on the endpoint
- * (IPC_EINVAL). The buffer has the device id at byte 0 and the setting at
- * byte 8, as Dolphin's USBV5 code reads it. */
+/* Set the alternate setting through IOS (USBV5 IOCTL 7). IOS must know
+ * the setting, or it refuses iso transfers on the endpoint (IPC_EINVAL).
+ * The function is in source/ogc_usb.c, our copy of libogc's usb.c, because
+ * it needs libogc's own /dev/usb/ven handle. */
+s32 USBV5_SetAlternateSetting(s32 device_id, u8 alternate);
+
 static int set_alt(s32 dev, int alt)
 {
-    static s32 ven = -1;
-    s32 *buf, ret;
-
-    if (ven < 0)
-        ven = IOS_Open("/dev/usb/ven", 0);
-    if (ven < 0)
-        return ven;
-    buf = memalign(32, 32);
-    if (buf == NULL)
-        return -1;
-    memset(buf, 0, 32);
-    buf[0] = dev;
-    ((u8 *)buf)[8] = (u8)alt;
-    ret = IOS_Ioctl(ven, 7, buf, 32, NULL, 0);
-    free(buf);
-    return ret;
+    return USBV5_SetAlternateSetting(dev, (u8)alt);
 }
 
 /* Interface number of one IOS device entry, or -1. */

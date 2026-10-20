@@ -235,3 +235,33 @@ int api_login(const char *user, const char *password, char *cookie, size_t cooki
     http_free(&r);
     return API_OK;
 }
+
+int api_map_nodes(const char *token, struct map_node *out, int max, int *count,
+                  char *err, size_t errlen)
+{
+    cJSON *root = NULL, *item;
+    int rc, n = 0;
+
+    rc = fetch_array("/api/map/nodes", token, &root, NULL, err, errlen);
+    if (rc != API_OK)
+        return rc;
+    cJSON_ArrayForEach(item, root) {
+        const cJSON *lat = cJSON_GetObjectItemCaseSensitive(item, "lat");
+        const cJSON *lon = cJSON_GetObjectItemCaseSensitive(item, "lon");
+        struct map_node *m;
+        if (n >= max)
+            break;
+        if (!cJSON_IsNumber(lat) || !cJSON_IsNumber(lon))
+            continue;
+        m = &out[n++];
+        m->lat = lat->valuedouble;
+        m->lon = lon->valuedouble;
+        to_ascii(m->name, sizeof(m->name), str_of(item, "display_name"));
+        to_ascii(m->short_name, sizeof(m->short_name), str_of(item, "short_name"));
+        m->gateway = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item, "is_mqtt_gateway"));
+    }
+    cJSON_Delete(root);
+    *count = n;
+    dbg("map: %d nodes", n);
+    return API_OK;
+}

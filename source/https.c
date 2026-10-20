@@ -227,7 +227,7 @@ int https_request(const char *method, const char *host, const char *path,
     ret = sprintf(req,
                   "%s %s HTTP/1.1\r\n"
                   "Host: %s\r\n"
-                  "User-Agent: SonoranWii/0.1\r\n"
+                  "User-Agent: SonoranWii/0.2 (personal Wii homebrew viewer for s.azmsh.dev)\r\n"
                   "Accept: application/json\r\n"
                   "Accept-Encoding: identity\r\n"
                   "Connection: close\r\n"

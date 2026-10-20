@@ -1,4 +1,4 @@
-Sonoran for Wii 0.1
+Sonoran for Wii 0.2
 
 This app shows chat messages and nodes from s.azmsh.dev (Sonoran).
 It uses TLS 1.3 (wolfSSL). It does not use the Internet Channel.
@@ -19,7 +19,8 @@ Other way (pairing): push 2, then run ./pair.sh <wii-ip> on a computer
 and paste the value of the "authelia_session" cookie.
 
 CONTROLS (Wii Remote)
-Left/Right  change screen (Chat, Nodes)
+Left/Right  change screen (Chat, Nodes, Map)
+-           change screen (on all screens, also Map)
 Up/Down     select a line
 A           open the line
 B           go back
@@ -27,6 +28,11 @@ B           go back
 1           log in
 2           pairing (get the session cookie over the LAN)
 Home        exit
+
+MAP
+D-Pad moves the map. A zooms in, B zooms out. The status line shows the
+node nearest to the cross. Red = node, blue = MQTT gateway.
+Map tiles: (c) OpenStreetMap contributors, tile.openstreetmap.org.
 
 The Wii clock must be correct, or the certificate check fails.
 Times are in Arizona time (UTC-7).

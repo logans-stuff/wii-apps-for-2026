@@ -12,11 +12,13 @@
 #include <wiiuse/wpad.h>
 
 #include "api.h"
+#include "map.h"
 #include "https.h"
 #include "net.h"
 
 #define MAX_CHAT 60
 #define MAX_NODES 150
+#define MAX_MAP_NODES 3000
 #define TOKEN_MAX 4096
 #define PAIR_PORT 4300
 
@@ -31,7 +33,7 @@
 #define SEL "\x1b[44m"
 #define UNSEL "\x1b[40m"
 
-enum screen { SCR_CHAT, SCR_NODES };
+enum screen { SCR_CHAT, SCR_NODES, SCR_MAP, SCR_COUNT };
 
 static void *xfb;
 static GXRModeObj *rmode;
@@ -42,6 +44,11 @@ static char token_path[256];
 static struct chat_msg chat[MAX_CHAT];
 static struct node_row nodes[MAX_NODES];
 static int chat_n, nodes_n;
+static struct map_node map_nodes[MAX_MAP_NODES];
+static int map_n;
+static enum screen cur_scr;
+/* Phoenix, the middle of the azmsh mesh */
+static struct map_view view = { 33.45, -112.07, 9 };
 static char status_line[512];
 
 static void video_start(void)
@@ -110,7 +117,8 @@ static void header(enum screen scr)
     printf(CLEAR AT(1, 1));
     printf(WHITE "Sonoran" GREY " - s.azmsh.dev   ");
     printf("%s[ Chat ]%s ", scr == SCR_CHAT ? YELLOW : GREY, GREY);
-    printf("%s[ Nodes ]%s\n", scr == SCR_NODES ? YELLOW : GREY, GREY);
+    printf("%s[ Nodes ]%s ", scr == SCR_NODES ? YELLOW : GREY, GREY);
+    printf("%s[ Map ]%s\n", scr == SCR_MAP ? YELLOW : GREY, GREY);
 }
 
 static void footer(void)
@@ -118,7 +126,10 @@ static void footer(void)
     printf("\x1b[%d;1H" GREY, rows);
     put_cut(status_line, cols);
     printf("\x1b[%d;1H", rows + 1);
-    put_cut("<-/-> screen  Up/Dn scroll  A open  B back  + reload  1 log in  2 pair  Home exit", cols);
+    if (cur_scr == SCR_MAP)
+        put_cut("D-Pad move  A zoom in  B zoom out  - screen  + reload  Home exit", cols);
+    else
+        put_cut("<-/-> or - screen  Up/Dn scroll  A open  B back  + reload  1 log in  2 pair", cols);
 }
 
 static void draw_chat(int top, int sel)
@@ -218,12 +229,14 @@ static void refresh(enum screen scr)
     char err[200];
     int rc, total;
 
-    dbg("refresh %s", scr == SCR_CHAT ? "chat" : "nodes");
+    dbg("refresh %s", scr == SCR_CHAT ? "chat" : scr == SCR_NODES ? "nodes" : "map");
     snprintf(status_line, sizeof(status_line), "Loading...");
     footer();
     VIDEO_WaitVSync();
     if (scr == SCR_CHAT)
         rc = api_chat(token, chat, MAX_CHAT, &chat_n, err, sizeof(err));
+    else if (scr == SCR_MAP)
+        rc = api_map_nodes(token, map_nodes, MAX_MAP_NODES, &map_n, err, sizeof(err));
     else
         rc = api_nodes(token, nodes, MAX_NODES, &nodes_n, &total, err, sizeof(err));
     if (rc == API_LOGIN && token[0] == '\0')
@@ -490,19 +503,41 @@ static int login(void)
     return 1;
 }
 
+static void draw_map(void)
+{
+    int near;
+
+    header(SCR_MAP);
+    snprintf(status_line, sizeof(status_line), "Loading map tiles...");
+    footer();
+    map_draw(&view, map_nodes, map_n);
+    near = map_nearest(&view, map_nodes, map_n);
+    if (near >= 0)
+        snprintf(status_line, sizeof(status_line), "%-4.4s %s  (zoom %d, %d nodes%s)",
+                 map_nodes[near].short_name, map_nodes[near].name, view.zoom, map_n,
+                 map_failed_tiles() ? ", some tiles failed" : "");
+    else
+        snprintf(status_line, sizeof(status_line), "Zoom %d, %d nodes%s. Map (c) OpenStreetMap",
+                 view.zoom, map_n, map_failed_tiles() ? ", some tiles failed" : "");
+    footer();
+}
+
 int main(int argc, char **argv)
 {
     char err[200];
     enum screen scr = SCR_CHAT;
-    int sel[2] = { 0, 0 }, top[2] = { 0, 0 };
+    int sel[SCR_COUNT] = { 0 }, top[SCR_COUNT] = { 0 };
     int detail = 0, redraw = 1;
-    int loaded[2] = { 0, 0 };
+    int loaded[SCR_COUNT] = { 0 };
 
     video_start();
     WPAD_Init();
     fatInitDefault();
 
-    printf(CLEAR AT(2, 1) WHITE "Sonoran for Wii 0.1\n\n" GREY);
+    /* Map area: below text row 1, above the two footer rows. */
+    map_setup(xfb, rmode->fbWidth, rmode->xfbHeight, 20 + 16 + 4, 20 + 16 * (rows - 1) - 4);
+
+    printf(CLEAR AT(2, 1) WHITE "Sonoran for Wii 0.2\n\n" GREY);
     /* Without a token the app still starts. The server then answers
      * with a login redirect, and the status line says so. */
     if (!load_token(argc > 0 ? argv[0] : NULL))
@@ -525,6 +560,7 @@ int main(int argc, char **argv)
         u32 down;
         int count, page = rows - 4;
 
+        cur_scr = scr;
         if (!loaded[scr]) {
             refresh(scr);
             loaded[scr] = 1;
@@ -532,9 +568,11 @@ int main(int argc, char **argv)
         }
         if (redraw) {
             count = scr == SCR_CHAT ? chat_n : nodes_n;
-            if (sel[scr] >= count)
+            if (scr != SCR_MAP && sel[scr] >= count)
                 sel[scr] = count > 0 ? count - 1 : 0;
-            if (detail && count > 0) {
+            if (scr == SCR_MAP) {
+                draw_map();
+            } else if (detail && count > 0) {
                 if (scr == SCR_CHAT)
                     draw_chat_detail(&chat[sel[scr]]);
                 else
@@ -555,21 +593,56 @@ int main(int argc, char **argv)
         if (down & WPAD_BUTTON_HOME)
             break;
 
+        if (scr == SCR_MAP) {
+            int step_x = rmode->fbWidth / 4, step_y = (rows * 16) / 4;
+            if (down & WPAD_BUTTON_MINUS) {
+                scr = SCR_CHAT;
+                redraw = 1;
+            } else if (down & WPAD_BUTTON_PLUS) {
+                loaded[scr] = 0;
+            } else if (down & WPAD_BUTTON_A) {
+                if (view.zoom < 17) {
+                    view.zoom++;
+                    redraw = 1;
+                }
+            } else if (down & WPAD_BUTTON_B) {
+                if (view.zoom > 3) {
+                    view.zoom--;
+                    redraw = 1;
+                }
+            } else if (down & (WPAD_BUTTON_LEFT | WPAD_BUTTON_RIGHT | WPAD_BUTTON_UP
+                               | WPAD_BUTTON_DOWN)) {
+                map_pan(&view,
+                        (down & WPAD_BUTTON_LEFT) ? -step_x : (down & WPAD_BUTTON_RIGHT) ? step_x : 0,
+                        (down & WPAD_BUTTON_UP) ? -step_y : (down & WPAD_BUTTON_DOWN) ? step_y : 0);
+                redraw = 1;
+            } else if (down & WPAD_BUTTON_1) {
+                if (login())
+                    memset(loaded, 0, sizeof(loaded));
+                redraw = 1;
+            } else if (down & WPAD_BUTTON_2) {
+                pair();
+                memset(loaded, 0, sizeof(loaded));
+            }
+            continue;
+        }
+
         count = scr == SCR_CHAT ? chat_n : nodes_n;
-        if (down & (WPAD_BUTTON_LEFT | WPAD_BUTTON_RIGHT)) {
-            scr = scr == SCR_CHAT ? SCR_NODES : SCR_CHAT;
+        if (down & (WPAD_BUTTON_LEFT | WPAD_BUTTON_RIGHT | WPAD_BUTTON_MINUS)) {
+            int step = (down & WPAD_BUTTON_LEFT) ? SCR_COUNT - 1 : 1;
+            scr = (enum screen)((scr + step) % SCR_COUNT);
             detail = 0;
             redraw = 1;
         } else if (down & WPAD_BUTTON_1) {
             /* Load again only after a good login, so that an error stays
              * on the status line. */
             if (login())
-                loaded[0] = loaded[1] = 0;
+                memset(loaded, 0, sizeof(loaded));
             detail = 0;
             redraw = 1;
         } else if (down & WPAD_BUTTON_2) {
             pair();
-            loaded[0] = loaded[1] = 0;
+            memset(loaded, 0, sizeof(loaded));
             detail = 0;
         } else if (down & WPAD_BUTTON_PLUS) {
             loaded[scr] = 0;

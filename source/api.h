@@ -29,6 +29,13 @@ struct node_row {
     int has_position;
 };
 
+struct map_node {
+    double lat, lon;
+    char name[32];
+    char short_name[8];
+    int gateway;
+};
+
 enum api_result { API_OK = 0, API_FAILED, API_LOGIN };
 
 /* Each call fills the array and sets *count. On error, err has the text. */
@@ -41,6 +48,10 @@ int api_nodes(const char *token, struct node_row *out, int max, int *count,
  * "authelia_session=...". The password is not kept. */
 int api_login(const char *user, const char *password, char *cookie, size_t cookielen,
               char *err, size_t errlen);
+
+/* Nodes with a position, from /api/map/nodes. */
+int api_map_nodes(const char *token, struct map_node *out, int max, int *count,
+                  char *err, size_t errlen);
 
 /* Copy UTF-8 text as plain ASCII. Characters out of ASCII become '?'. */
 void to_ascii(char *dst, size_t dstlen, const char *src);

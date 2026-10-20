@@ -37,8 +37,9 @@ static void defaults(struct mesh_config *c)
     c->lora.preamble = 16;
     c->channel_hash = 0x1f;
     c->keylen = 0; /* public default key */
-    c->hop_limit = 3;
+    c->hop_limit = 7;
     c->tx_power = 22;
+    c->hw_model = 255; /* PRIVATE_HW */
     snprintf(c->source, sizeof(c->source), "defaults");
 }
 
@@ -150,6 +151,8 @@ void config_load(struct mesh_config *c)
                 c->tx_power = 22;
             if (c->tx_power < -9)
                 c->tx_power = -9;
+        } else if (!strcmp(kn, "hwmodel") || !strcmp(kn, "device") || !strcmp(kn, "hardware")) {
+            c->hw_model = (int)strtoul(val, NULL, 0) & 0xff;
         }
         else if (!strcmp(kn, "key") || !strcmp(kn, "psk")) {
             byte out[48];

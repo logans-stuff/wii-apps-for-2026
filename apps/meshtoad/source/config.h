@@ -16,6 +16,7 @@ struct mesh_config {
     int keylen;             /* 16 or 32 for a custom key; 0 = public default */
     int hop_limit;          /* hops a transmitted packet may travel (0..7) */
     int tx_power;           /* transmit power in dBm (SX1262, up to 22) */
+    int hw_model;           /* Meshtastic hardware-model byte (255 = PRIVATE_HW) */
     char source[80];        /* "defaults" or the file it loaded, for display */
 };
 

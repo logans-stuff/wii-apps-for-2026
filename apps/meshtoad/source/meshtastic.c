@@ -23,10 +23,16 @@ static uint8_t cur_key[32] = {
 };
 static int cur_keylen = 16;
 static int cur_hops = 3; /* hop limit / hop start for packets we send */
+static int cur_hw_model = 255; /* PRIVATE_HW; shown as the node's device type */
 
 void mesh_set_hop_limit(int hops)
 {
     cur_hops = hops < 0 ? 0 : hops > 7 ? 7 : hops;
+}
+
+void mesh_set_hw_model(int model)
+{
+    cur_hw_model = model & 0xff;
 }
 
 void mesh_set_key(const uint8_t *key, int len)
@@ -293,7 +299,7 @@ int mesh_encode_nodeinfo(uint32_t from, uint32_t id, uint8_t chan_hash,
     memcpy(user + u, short_name, (size_t)sn);
     u += sn;
     user[u++] = 0x28; /* field 5 hw_model varint */
-    user[u++] = 0x00; /* UNSET */
+    u += put_varint(user + u, (uint64_t)cur_hw_model);
 
     /* Data: portnum(1)=NODEINFO, payload(2)=user. */
     data[d++] = 0x08;

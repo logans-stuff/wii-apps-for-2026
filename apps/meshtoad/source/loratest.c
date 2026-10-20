@@ -218,6 +218,7 @@ int main(void)
     config_load(&CFG);               /* sd:/apps/meshtoad/config.txt, else defaults */
     mesh_set_key(CFG.key, CFG.keylen);
     mesh_set_hop_limit(CFG.hop_limit);
+    mesh_set_hw_model(CFG.hw_model);
     sx_set_tx_power(CFG.tx_power);
     dbg("lora: nodedb load rc=%d, %d nodes restored",
         nodedb_load(NODEDB_PATH), nodedb_count());

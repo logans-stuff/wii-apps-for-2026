@@ -43,6 +43,9 @@ void mesh_set_key(const uint8_t *key, int len);
 /* Hop limit (and hop start) for packets we transmit, 0..7. */
 void mesh_set_hop_limit(int hops);
 
+/* Hardware-model byte advertised in our NodeInfo (default 255 = PRIVATE_HW). */
+void mesh_set_hw_model(int model);
+
 /* Self-test: build a text packet, encrypt it, decode it back. Returns 0 on
  * success. Host-runnable; no radio needed. */
 int mesh_selftest(char *err, size_t errlen);

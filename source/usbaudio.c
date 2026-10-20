@@ -6,6 +6,7 @@
  * The driver reads the descriptors and does not assume these numbers. */
 #include <malloc.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -166,22 +167,25 @@ int ua_open(char *info, size_t infolen, char *err, size_t errlen)
         dbg("ua: mic set_alt(%08x, %d) = %d", (unsigned)mic_fd, mic.alt, (int)ret);
     }
     /* The headphones are switched on only while they play (ua_play).
-     * A headset that stays on with no data can buzz. The first playback
-     * after power-on is slow and broken (measured: 2.4 s of sound took
-     * 5.6 s), so play 300 ms of silence once here as a warm-up. */
-    /* The first recording after power-on is silent (measured: peak 0),
-     * so record 300 ms once here as a warm-up too. */
-    if (mic.ep) {
-        static int16_t mwarm[48 * 320];
+     * A headset that stays on with no data can buzz.
+     * Measured on the Razer headset: the first playback after power-on
+     * is slow and broken, and the first recording after the headphones
+     * were switched on and off for the first time is silent (peak 0).
+     * After the order "play, record, play" both work. So do that order
+     * once here, with silence, before the user records. */
+    if (spk.ep && mic.ep) {
+        static int16_t warm[48 * 320];
         unsigned long long t0 = net_ms();
-        int n = ua_record(mwarm, 48 * 320, NULL);
-        dbg("ua: mic warm-up %d samples in %llu ms", n, net_ms() - t0);
-    }
-    if (spk.ep) {
-        static int16_t warm[48 * 300];
-        unsigned long long t0 = net_ms();
+        int n, i, peak = 0;
         ua_play(warm, 48 * 300);
-        dbg("ua: warm-up took %llu ms", net_ms() - t0);
+        n = ua_record(warm, 48 * 320, NULL);
+        for (i = 0; i < n; i++)
+            if (abs(warm[i]) > peak)
+                peak = abs(warm[i]);
+        memset(warm, 0, sizeof(warm));
+        ua_play(warm, 48 * 300);
+        dbg("ua: warm-up (play, record %d samples peak %d, play) took %llu ms", n, peak,
+            net_ms() - t0);
     }
     return 0;
 }

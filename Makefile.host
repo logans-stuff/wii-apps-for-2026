@@ -1,8 +1,14 @@
-# Linux test build: make -f Makefile.host
-include wolfssl.mk
-CFLAGS := -O2 -g -Wall $(WOLF_CFLAGS) -Ithird_party/qrcodegen/c
+# Linux test build of the portable code (TLS, API, Meshtastic decode/encode):
+#   docker run --rm -v "$PWD":/w -w /w gcc:14 make -f Makefile.host
+#   ./build-host/hosttest --mesh      # Meshtastic AES-CTR + protobuf round-trip
+include common/wolfssl.mk
+CFLAGS := -O2 -g -Wall $(WOLF_CFLAGS) -Iapps/sonoran/source -Iapps/meshtoad/source -Ithird_party/qrcodegen/c
 -include local.mk
-SRC := source/hosttest.c source/https.c source/api.c source/discord.c source/dc_qr.c source/ws.c source/meshtastic.c source/net_posix.c third_party/qrcodegen/c/qrcodegen.c $(CJSON_SRC) $(WOLF_SRC)
-build-host/hosttest: $(SRC) include/user_settings.h source/cacerts.h
+SRC := tools/hosttest.c \
+  apps/sonoran/source/https.c apps/sonoran/source/api.c apps/sonoran/source/discord.c \
+  apps/sonoran/source/dc_qr.c apps/sonoran/source/ws.c \
+  apps/meshtoad/source/meshtastic.c common/net_posix.c \
+  third_party/qrcodegen/c/qrcodegen.c $(CJSON_SRC) $(WOLF_SRC)
+build-host/hosttest: $(SRC) common/user_settings.h common/cacerts.h
 	mkdir -p build-host
 	$(CC) $(CFLAGS) -o $@ $(SRC)

@@ -1,8 +1,8 @@
-/* Sonoran LoRa node: a minimal Meshtastic node on the Wii over the CH341 +
- * SX1262 Meshtoad. It listens, decodes packets, keeps a NodeDB of everyone it
- * hears, and can transmit. Controls:
- *   1 = toggle Nodes / Messages view   A = send text   B = announce this node
- *   Home = exit. Runs on the default channel key. */
+/* Sonoran LoRa node: a Meshtastic node on the Wii over the CH341 + SX1262
+ * Meshtoad. Listens, decodes, keeps a NodeDB of everyone it hears, and can
+ * transmit. Controls:
+ *   D-Pad up/down = scroll/select   1 = toggle Nodes / Messages
+ *   A = type a message   2 = quick chat   B = announce this node   Home = exit */
 #include <stdio.h>
 #include <string.h>
 
@@ -16,8 +16,7 @@
 #include "nodedb.h"
 #include "osk.h"
 
-/* Meshtastic US MediumFast, frequency slot 18: SF9, BW250, CR4/5, sync 0x2B.
- * Slot->freq (BW250): 902.0 + 0.125 + (slot-1)*0.25 MHz = 906.375 MHz. */
+/* Meshtastic US MediumFast, frequency slot 18: SF9, BW250, CR4/5, sync 0x2B. */
 static const struct lora_cfg US_MEDIUMFAST = {
     906375000U, 9, 250, 5, 0x2B, 16
 };
@@ -29,7 +28,16 @@ static const struct lora_cfg US_MEDIUMFAST = {
 
 enum { VIEW_NODES, VIEW_MESSAGES };
 
+#define BODY_TOP 9
+#define VIEW_ROWS 12
+#define MSG_MAX 64
+
 static void *xfb;
+
+static char msgs[MSG_MAX][72];
+static int msg_count;
+static int msg_top;     /* first visible message in Messages view */
+static int node_sel;    /* selected node in Nodes view */
 
 static void video_start(void)
 {
@@ -47,37 +55,43 @@ static void video_start(void)
     VIDEO_WaitVSync();
 }
 
-/* ---- message log (Messages view) ---- */
-#define LOGN 11
-#define BODY_TOP 9
-static char logbuf[LOGN][72];
-static int logcount;
-
 static void log_add(const char *s)
 {
-    int i;
-    if (logcount < LOGN)
-        snprintf(logbuf[logcount++], 72, "%s", s);
-    else {
-        for (i = 1; i < LOGN; i++)
-            memcpy(logbuf[i - 1], logbuf[i], 72);
-        snprintf(logbuf[LOGN - 1], 72, "%s", s);
+    int following = msg_top >= msg_count - VIEW_ROWS;
+    if (msg_count < MSG_MAX) {
+        snprintf(msgs[msg_count++], 72, "%s", s);
+    } else {
+        int i;
+        for (i = 1; i < MSG_MAX; i++)
+            memcpy(msgs[i - 1], msgs[i], 72);
+        snprintf(msgs[MSG_MAX - 1], 72, "%s", s);
     }
+    if (following) /* keep the newest in view */
+        msg_top = msg_count > VIEW_ROWS ? msg_count - VIEW_ROWS : 0;
 }
 
 static void clear_body(void)
 {
     int r;
-    for (r = BODY_TOP; r < BODY_TOP + LOGN + 1; r++)
+    for (r = BODY_TOP - 1; r < BODY_TOP + VIEW_ROWS; r++)
         printf("\x1b[%d;1H%-71s", r, "");
 }
 
 static void render_messages(void)
 {
-    int i;
-    printf("\x1b[%d;1HMessages (1=nodes)                               \n", BODY_TOP - 1);
-    for (i = 0; i < LOGN; i++)
-        printf("\x1b[%d;1H%-71.71s", BODY_TOP + i, i < logcount ? logbuf[i] : "");
+    int i, maxtop = msg_count > VIEW_ROWS ? msg_count - VIEW_ROWS : 0;
+    int last;
+    if (msg_top > maxtop)
+        msg_top = maxtop;
+    if (msg_top < 0)
+        msg_top = 0;
+    last = msg_top + VIEW_ROWS < msg_count ? msg_top + VIEW_ROWS : msg_count;
+    printf("\x1b[%d;1HMessages %d-%d/%d   up/down scroll   1=nodes          \n",
+           BODY_TOP - 1, msg_count ? msg_top + 1 : 0, last, msg_count);
+    for (i = 0; i < VIEW_ROWS; i++) {
+        int idx = msg_top + i;
+        printf("\x1b[%d;1H%-71.71s", BODY_TOP + i, idx < msg_count ? msgs[idx] : "");
+    }
 }
 
 static void fmt_age(unsigned s, char *out, int n)
@@ -90,36 +104,51 @@ static void fmt_age(unsigned s, char *out, int n)
         snprintf(out, n, "%uh", s / 3600);
 }
 
+static void node_row(const struct node *nd, unsigned long long now, char *out, int n)
+{
+    char nm[8], age[12], hop[16], pos[36] = "", batt[16] = "";
+    snprintf(nm, sizeof(nm), "%-4.4s", nd->has_name ? nd->short_name : "----");
+    fmt_age((unsigned)((now - nd->last_heard) / 1000), age, sizeof(age));
+    if (nd->hops >= 0)
+        snprintf(hop, sizeof(hop), "%dh", nd->hops);
+    else
+        snprintf(hop, sizeof(hop), "?");
+    if (nd->has_pos)
+        snprintf(pos, sizeof(pos), " %.4f,%.4f", nd->lat, nd->lon);
+    if (nd->has_batt)
+        snprintf(batt, sizeof(batt), " %d%%", nd->battery);
+    snprintf(out, n, "%s !%08x %-3s %5.1fdB %-4s%s%s",
+             nm, nd->id, hop, nd->snr, age, pos, batt);
+}
+
 static void render_nodes(void)
 {
-    int i, count = nodedb_count();
+    int i, count = nodedb_count(), top, maxtop;
     unsigned long long now = net_ms();
 
-    printf("\x1b[%d;1HNodes heard: %-3d (1=messages)                    \n",
-           BODY_TOP - 1, count);
-    for (i = 0; i < LOGN; i++) {
-        const struct node *nd = nodedb_get(i);
-        char line[80];
-        if (nd == NULL) {
-            printf("\x1b[%d;1H%-71s", BODY_TOP + i, "");
-            continue;
-        }
-        {
-            char nm[8], age[12], hop[16], pos[36] = "", batt[16] = "";
-            snprintf(nm, sizeof(nm), "%-4.4s", nd->has_name ? nd->short_name : "----");
-            fmt_age((unsigned)((now - nd->last_heard) / 1000), age, sizeof(age));
-            if (nd->hops >= 0)
-                snprintf(hop, sizeof(hop), "%dh", nd->hops);
-            else
-                snprintf(hop, sizeof(hop), "?");
-            if (nd->has_pos)
-                snprintf(pos, sizeof(pos), " %.4f,%.4f", nd->lat, nd->lon);
-            if (nd->has_batt)
-                snprintf(batt, sizeof(batt), " %d%%", nd->battery);
-            snprintf(line, sizeof(line), "%s !%08x %-3s %5.1fdB %-4s%s%s",
-                     nm, nd->id, hop, nd->snr, age, pos, batt);
+    if (node_sel >= count)
+        node_sel = count > 0 ? count - 1 : 0;
+    if (node_sel < 0)
+        node_sel = 0;
+    top = node_sel - VIEW_ROWS / 2;
+    maxtop = count > VIEW_ROWS ? count - VIEW_ROWS : 0;
+    if (top > maxtop)
+        top = maxtop;
+    if (top < 0)
+        top = 0;
+
+    printf("\x1b[%d;1HNodes %d/%d   up/down select   1=messages              \n",
+           BODY_TOP - 1, count ? node_sel + 1 : 0, count);
+    for (i = 0; i < VIEW_ROWS; i++) {
+        int idx = top + i;
+        const struct node *nd = idx < count ? nodedb_get(idx) : NULL;
+        char line[80] = "";
+        if (nd != NULL)
+            node_row(nd, now, line, sizeof(line));
+        if (nd != NULL && idx == node_sel)
+            printf("\x1b[%d;1H\x1b[7m%-71.71s\x1b[0m", BODY_TOP + i, line);
+        else
             printf("\x1b[%d;1H%-71.71s", BODY_TOP + i, line);
-        }
     }
 }
 
@@ -128,7 +157,7 @@ static void redraw_all(const char *info, int view, long rx, long crc, long tx)
     printf("\x1b[2J");
     printf("\x1b[2;1HSonoran LoRa node  (!%08x \"%s\")\n", WII_NODE, WII_LONG);
     printf("\x1b[3;1HRadio: %s\n", info);
-    printf("\x1b[4;1H%u Hz SF%d BW%d ch %02x  1=view A=type 2=quick B=announce Home=exit\n",
+    printf("\x1b[4;1H%u Hz SF%d BW%d ch %02x  up/down scroll 1=view A=type 2=quick B=ann Home=exit\n",
            US_MEDIUMFAST.freq_hz, US_MEDIUMFAST.sf, US_MEDIUMFAST.bw_khz, CHAN_HASH);
     printf("\x1b[8;1Hrx %ld  crc %ld  tx %ld\n", rx, crc, tx);
     if (view == VIEW_NODES)
@@ -168,7 +197,6 @@ static void send_nodeinfo(void)
     dbg("lora: TX nodeinfo rc=%d len=%d", rc, flen);
 }
 
-/* Wait for Home, then shut the network down so HBC can reconnect Wi-Fi. */
 static int wait_home(void)
 {
     for (;;) {
@@ -225,6 +253,17 @@ int main(void)
         down = WPAD_ButtonsDown(0);
         if (down & WPAD_BUTTON_HOME)
             break;
+        if (down & (WPAD_BUTTON_UP | WPAD_BUTTON_DOWN)) {
+            int dir = (down & WPAD_BUTTON_UP) ? -1 : 1;
+            if (view == VIEW_NODES)
+                node_sel += dir;
+            else
+                msg_top += dir;
+            if (view == VIEW_NODES)
+                render_nodes();
+            else
+                render_messages();
+        }
         if (down & WPAD_BUTTON_1) {
             view = view == VIEW_NODES ? VIEW_MESSAGES : VIEW_NODES;
             clear_body();

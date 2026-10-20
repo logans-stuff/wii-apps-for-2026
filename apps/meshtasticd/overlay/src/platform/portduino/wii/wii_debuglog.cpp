@@ -65,6 +65,12 @@ extern "C" void wii_debuglog_start()
 
 extern "C" void wii_debuglog_stop()
 {
+    static bool stopped;
+    if (stopped)
+        return;
+    stopped = true;
+    fflush(stdout); // the last lines are usually the interesting ones
+    fflush(stderr);
     if (g_sock >= 0)
         net_close(g_sock);
     g_sock = -1;

@@ -1,0 +1,16 @@
+diff --git a/src/FSCommon.cpp b/src/FSCommon.cpp
+index b626914..e9c5271 100644
+--- a/src/FSCommon.cpp
++++ b/src/FSCommon.cpp
+@@ -125,6 +125,11 @@ bool renameFile(const char *pathFrom, const char *pathTo)
+ {
+ #ifdef FSCom
+     spiLock->lock();
++#ifdef ARCH_PORTDUINO_WII
++    // libfat's rename() won't replace an existing file (POSIX rename does).
++    if (FSCom.exists(pathTo))
++        FSCom.remove(pathTo);
++#endif
+     bool result = FSCom.rename(pathFrom, pathTo);
+     spiLock->unlock();
+     return result;

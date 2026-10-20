@@ -35,8 +35,8 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$ROOT":/w -w /w devkitpro/devkitp
     -Ithird_party/libogc/gc/ogc/machine -c -o "$APP"/build/ogc_usb.o common/ogc_usb.c
 
 docker volume create meshtasticd-wii-pio >/dev/null
-EXTRA_FLAGS=
-[ -n "$WII_DEBUG_HOST" ] && EXTRA_FLAGS="-DWII_DEBUG_HOST=\\\"$WII_DEBUG_HOST\\\""
+EXTRA_FLAGS="$WII_EXTRA_FLAGS" # e.g. "-DRADIOLIB_DEBUG_BASIC=1 -DRADIOLIB_DEBUG_SPI=1"
+[ -n "$WII_DEBUG_HOST" ] && EXTRA_FLAGS="$EXTRA_FLAGS -DWII_DEBUG_HOST=\\\"$WII_DEBUG_HOST\\\""
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/pio -e PLATFORMIO_CORE_DIR=/pio/.platformio \
     -e PLATFORMIO_BUILD_FLAGS="$EXTRA_FLAGS" \
     -v meshtasticd-wii-pio:/pio -v "$ROOT":/w -w /w/"$FW" "$IMAGE" pio run -e native-wii "$@"

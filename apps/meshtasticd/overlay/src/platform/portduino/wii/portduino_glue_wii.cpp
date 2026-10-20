@@ -184,6 +184,7 @@ void randomSeed(unsigned long seed)
 extern "C" void wii_debuglog_stop();
 void reboot()
 {
+    printf("reboot requested: returning to the loader\n");
     wii_debuglog_stop(); // leave Wi-Fi down so HBC can bring it up again
     exit(0);
 }

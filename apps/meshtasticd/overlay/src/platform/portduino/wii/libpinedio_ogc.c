@@ -27,7 +27,11 @@
 
 static s32 fd = -1;
 static uint8_t dir_bits, out_bits;
-static uint8_t *iobuf; // 32-byte aligned DMA buffer
+// Separate 32-byte aligned DMA buffers per direction. With one shared buffer a
+// short IN transfer could hand back the OUT bytes still sitting in it (the
+// bit-reversed 0xA8 + echoed command RadioLib read as "command failed").
+static uint8_t *outbuf, *inbuf;
+#define DMA_SIZE ((WIRE_MAX + 31) & ~31)
 
 static uint8_t rev(uint8_t x)
 {
@@ -38,26 +42,56 @@ static uint8_t rev(uint8_t x)
 
 static int usb_out(const uint8_t *data, int len)
 {
-    memcpy(iobuf, data, (size_t)len);
-    DCFlushRange(iobuf, WIRE_MAX);
-    return USB_WriteBlkMsg(fd, EP_OUT, (u16)len, iobuf) < 0 ? -1 : 0;
+    s32 r;
+    memcpy(outbuf, data, (size_t)len);
+    DCFlushRange(outbuf, DMA_SIZE);
+    r = USB_WriteBlkMsg(fd, EP_OUT, (u16)len, outbuf);
+    if (r < 0)
+        printf("ch341: bulk OUT %d bytes failed (%d)\n", len, (int)r);
+    return r < 0 ? -1 : 0;
 }
 
 // Read exactly len bytes (the chip may answer in several bulk reads).
+// Read exactly len bytes. Always ask IOS for a whole 32-byte packet: on the
+// Wii a bulk IN of a length that isn't a multiple of 4 only delivers the whole
+// 4-byte words, so a 2-byte status read came back empty. The CH341 ends every
+// reply with a short packet, so asking for more never over-reads; anything
+// beyond len (not expected) is carried into the next read.
+static uint8_t carry[PKT];
+static int carry_len;
+
 static int usb_in(uint8_t *data, int len)
 {
     int got = 0, tries = 0;
-    while (got < len && tries++ < 32) {
-        int want = len - got > PKT - 1 ? PKT - 1 : len - got;
-        s32 n;
-        DCInvalidateRange(iobuf, WIRE_MAX);
-        n = USB_ReadBlkMsg(fd, EP_IN, (u16)want, iobuf);
-        if (n < 0)
-            return -1;
-        DCInvalidateRange(iobuf, WIRE_MAX);
-        memcpy(data + got, iobuf, (size_t)n);
-        got += n;
+    if (carry_len > 0) {
+        int n = carry_len < len ? carry_len : len;
+        memcpy(data, carry, (size_t)n);
+        memmove(carry, carry + n, (size_t)(carry_len - n));
+        carry_len -= n;
+        got = n;
     }
+    while (got < len && tries++ < 32) {
+        s32 n;
+        memset(inbuf, 0xEE, PKT);
+        DCFlushRange(inbuf, DMA_SIZE);
+        n = USB_ReadBlkMsg(fd, EP_IN, PKT, inbuf);
+        if (n < 0) {
+            printf("ch341: bulk IN failed (%d) after %d/%d bytes\n", (int)n, got, len);
+            return -1;
+        }
+        DCInvalidateRange(inbuf, DMA_SIZE);
+        if (n > PKT)
+            n = PKT;
+        int take = n < len - got ? n : len - got;
+        memcpy(data + got, inbuf, (size_t)take);
+        got += take;
+        if (n > take) {
+            memcpy(carry, inbuf + take, (size_t)(n - take));
+            carry_len = n - take;
+        }
+    }
+    if (got != len)
+        printf("ch341: short read %d/%d bytes\n", got, len);
     return got == len ? 0 : -1;
 }
 
@@ -103,15 +137,25 @@ int32_t pinedio_init(struct pinedio_inst *inst, void *driver)
     inst->in_error = false;
     for (i = 0; i < PINEDIO_INT_PIN_MAX; i++)
         inst->interrupts[i].callback = NULL;
-    if (iobuf == NULL)
-        iobuf = (uint8_t *)memalign(32, (WIRE_MAX + 31) & ~31);
-    if (iobuf == NULL)
+    // DMA buffers from an IOS heap (MEM2). From memalign (MEM1) only whole
+    // 4-byte words of an IN transfer arrived: a 2-byte SPI reply never landed.
+    if (outbuf == NULL || inbuf == NULL) {
+        s32 hid = iosCreateHeap(2 * DMA_SIZE + 256);
+        if (hid >= 0) {
+            outbuf = (uint8_t *)iosAlloc(hid, DMA_SIZE);
+            inbuf = (uint8_t *)iosAlloc(hid, DMA_SIZE);
+        }
+        printf("ch341: DMA buffers in %s\n", hid >= 0 ? "IOS heap (MEM2)" : "-");
+    }
+    if (outbuf == NULL || inbuf == NULL)
         return -1;
     USB_Initialize();
     if (open_device(vid, pid) != 0) {
+        printf("ch341: no %04x:%04x on USB (is the MeshToad plugged in?)\n", vid, pid);
         inst->in_error = true;
         return -2;
     }
+    printf("ch341: opened %04x:%04x\n", vid, pid);
     snprintf(inst->serial_number, sizeof(inst->serial_number), "wii");
     snprintf(inst->product_string, sizeof(inst->product_string), "CH341 %04x:%04x (Wii USB)", vid, pid);
     // SCK (D3) and MOSI (D5) must be outputs or every MISO byte reads 0xFF.

@@ -22,6 +22,12 @@ static uint8_t cur_key[32] = {
     0xf0, 0xbc, 0xff, 0xab, 0xcf, 0x4e, 0x69, 0x01
 };
 static int cur_keylen = 16;
+static int cur_hops = 3; /* hop limit / hop start for packets we send */
+
+void mesh_set_hop_limit(int hops)
+{
+    cur_hops = hops < 0 ? 0 : hops > 7 ? 7 : hops;
+}
 
 void mesh_set_key(const uint8_t *key, int len)
 {
@@ -230,7 +236,7 @@ static int build_frame(uint32_t from, uint32_t to, uint32_t id, uint8_t chan,
     wr32(frame, to);
     wr32(frame + 4, from);
     wr32(frame + 8, id);
-    frame[12] = 0x63;  /* hop limit 3, hop start 3 */
+    frame[12] = (uint8_t)((cur_hops & 7) | ((cur_hops & 7) << 5)); /* hop limit + start */
     frame[13] = chan;
     frame[14] = 0;     /* next_hop */
     frame[15] = 0;     /* relay_node */

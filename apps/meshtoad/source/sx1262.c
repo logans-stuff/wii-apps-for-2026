@@ -52,6 +52,12 @@
 #define IRQ_TIMEOUT 0x0200
 
 static struct lora_cfg cur_cfg; /* remembered for re-arming RX after a TX */
+static int cur_power = 22;       /* transmit power in dBm */
+
+void sx_set_tx_power(int dbm)
+{
+    cur_power = dbm < -9 ? -9 : dbm > 22 ? 22 : dbm;
+}
 
 static unsigned long long ms(void)
 {
@@ -314,7 +320,7 @@ int sx_send(const uint8_t *buf, int len)
 {
     uint8_t stdby = 0x00, base[2] = { 0, 0 }, pkt[6], irq[8], tx[3] = { 0, 0, 0 };
     uint8_t pa[4] = { 0x04, 0x07, 0x00, 0x01 };   /* +22 dBm PA config (SX1262) */
-    uint8_t txp[2] = { 0x16, 0x04 };              /* 22 dBm, 200 us ramp */
+    uint8_t txp[2] = { (uint8_t)(int8_t)cur_power, 0x04 }; /* power dBm, 200 us ramp */
     uint8_t wb[257], clr[2] = { 0xFF, 0xFF };
     uint16_t mask;
     unsigned long long t0;

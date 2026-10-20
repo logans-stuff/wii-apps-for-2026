@@ -14,6 +14,8 @@ struct mesh_config {
     uint8_t channel_hash;
     uint8_t key[32];
     int keylen;             /* 16 or 32 for a custom key; 0 = public default */
+    int hop_limit;          /* hops a transmitted packet may travel (0..7) */
+    int tx_power;           /* transmit power in dBm (SX1262, up to 22) */
     char source[80];        /* "defaults" or the file it loaded, for display */
 };
 

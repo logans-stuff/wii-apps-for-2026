@@ -24,6 +24,8 @@ int sx_start_rx(const struct lora_cfg *c);
 /* Transmit one frame, then return to continuous receive. Return 0 on success.
  * sx_start_rx must have been called first (it sets the modulation/channel). */
 int sx_send(const uint8_t *buf, int len);
+/* Transmit power in dBm (-9..22), applied to subsequent sends. */
+void sx_set_tx_power(int dbm);
 /* Check for a received packet. Return its length (> 0), 0 when none,
  * or -1 for a packet with a CRC error. */
 int sx_poll(uint8_t *buf, int max, int *rssi, float *snr);

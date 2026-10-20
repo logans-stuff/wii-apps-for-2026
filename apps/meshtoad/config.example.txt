@@ -20,6 +20,10 @@ slot   = 18            # US 902-928 MHz frequency slot (1-based)
 
 channel = 0x1f         # channel hash (the byte seen in received packets)
 
+# --- Transmit ---
+hop   = 3              # hop limit for packets we send (0-7)
+power = 22             # TX power in dBm (-9 to 22)
+
 # --- Channel key (PSK), base64 ---
 # Omit, or use "AQ==", for the public default channel key. For a private
 # channel paste its 16- or 32-byte key in base64 (from the channel's QR/URL).

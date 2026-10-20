@@ -40,6 +40,9 @@ int mesh_decode(const uint8_t *frame, int len, struct mesh_pkt *out,
  * resets to the public default key. Applies to decode and encode. */
 void mesh_set_key(const uint8_t *key, int len);
 
+/* Hop limit (and hop start) for packets we transmit, 0..7. */
+void mesh_set_hop_limit(int hops);
+
 /* Self-test: build a text packet, encrypt it, decode it back. Returns 0 on
  * success. Host-runnable; no radio needed. */
 int mesh_selftest(char *err, size_t errlen);

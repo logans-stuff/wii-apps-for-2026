@@ -152,7 +152,7 @@ static void redraw_all(const char *info, int view, long rx, long crc, long tx)
 {
     printf("\x1b[2J");
     printf("\x1b[2;1HSonoran LoRa node  (!%08x \"%s\")\n", CFG.node_id, CFG.long_name);
-    printf("\x1b[3;1HRadio: %s\n", info);
+    printf("\x1b[3;1HRadio: %.46s  hop %d  %ddBm\n", info, CFG.hop_limit, CFG.tx_power);
     printf("\x1b[4;1H%u Hz SF%d BW%d ch %02x  up/down scroll 1=view A=type 2=quick B=ann Home=exit\n",
            CFG.lora.freq_hz, CFG.lora.sf, CFG.lora.bw_khz, CFG.channel_hash);
     printf("\x1b[8;1Hrx %ld  crc %ld  tx %ld\n", rx, crc, tx);
@@ -217,6 +217,8 @@ int main(void)
     nodedb_reset();
     config_load(&CFG);               /* sd:/apps/meshtoad/config.txt, else defaults */
     mesh_set_key(CFG.key, CFG.keylen);
+    mesh_set_hop_limit(CFG.hop_limit);
+    sx_set_tx_power(CFG.tx_power);
     dbg("lora: nodedb load rc=%d, %d nodes restored",
         nodedb_load(NODEDB_PATH), nodedb_count());
     printf("\x1b[2;1HSonoran LoRa node  (!%08x \"%s\", %s)\n",

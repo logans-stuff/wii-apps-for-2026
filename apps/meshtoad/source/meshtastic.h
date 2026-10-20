@@ -14,7 +14,10 @@
 #define MESH_PORT_TEXT 1
 #define MESH_PORT_POSITION 3
 #define MESH_PORT_NODEINFO 4
+#define MESH_PORT_ROUTING 5
 #define MESH_PORT_TELEMETRY 67
+#define MESH_PORT_TRACEROUTE 70
+#define MESH_PORT_NEIGHBORINFO 71
 
 struct mesh_pkt {
     uint32_t to;        /* destination node (0xffffffff = broadcast) */
@@ -23,11 +26,20 @@ struct mesh_pkt {
     uint8_t flags;      /* hop limit in the low 3 bits */
     uint8_t channel;    /* channel hash from the header */
     uint32_t portnum;   /* decoded app port, or 0 if the payload didn't parse */
+    int want_response;
+    uint32_t data_dest, data_source, request_id, reply_id;
     uint8_t payload[237];
     int payload_len;
     char text[237];     /* NUL-terminated when portnum == MESH_PORT_TEXT */
     char long_name[40]; /* from the User protobuf when portnum == MESH_PORT_NODEINFO */
     char short_name[8];
+};
+
+struct mesh_route {
+    uint32_t route[8], route_back[8];
+    int8_t snr_towards[8], snr_back[8];
+    int route_count, route_back_count;
+    int snr_towards_count, snr_back_count;
 };
 
 /* Decode one frame. Return 0 on success (out filled), -1 on a malformed
@@ -58,5 +70,20 @@ int mesh_encode_text(uint32_t from, uint32_t to, uint32_t id, uint8_t chan_hash,
 int mesh_encode_nodeinfo(uint32_t from, uint32_t id, uint8_t chan_hash,
                          const char *long_name, const char *short_name,
                          uint8_t *frame, int maxlen);
+int mesh_encode_traceroute(uint32_t from, uint32_t to, uint32_t id,
+                           uint8_t chan_hash, uint8_t *frame, int maxlen);
+int mesh_parse_traceroute(const uint8_t *payload, int len, struct mesh_route *out);
+/* Reply to a traceroute request (request_id = the request's packet id). */
+int mesh_encode_traceroute_reply(uint32_t from, uint32_t to, uint32_t id,
+                                 uint8_t chan_hash, uint32_t request_id,
+                                 const struct mesh_route *route, uint8_t *frame, int maxlen);
+
+/* Routing (port 5) ACK/NAK. mesh_routing_error returns the error_reason
+ * (MESH_ROUTING_NONE = delivered) or -1 if the payload is malformed. */
+#define MESH_ROUTING_NONE 0
+int mesh_routing_error(const uint8_t *payload, int len);
+const char *mesh_routing_error_name(int error);
+int mesh_encode_ack(uint32_t from, uint32_t to, uint32_t id, uint8_t chan_hash,
+                    uint32_t request_id, int error, uint8_t *frame, int maxlen);
 
 #endif

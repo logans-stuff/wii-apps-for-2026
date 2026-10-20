@@ -12,3 +12,14 @@ SRC := tools/hosttest.c \
 build-host/hosttest: $(SRC) common/user_settings.h common/cacerts.h
 	mkdir -p build-host
 	$(CC) $(CFLAGS) -o $@ $(SRC)
+
+build-host/nodedb_test: tools/nodedb_test.c apps/meshtoad/source/nodedb.c \
+  apps/meshtoad/source/nodedb.h apps/meshtoad/source/meshtastic.h
+	mkdir -p build-host
+	$(CC) -O2 -g -Wall -Iapps/meshtoad/source -o $@ \
+	  tools/nodedb_test.c apps/meshtoad/source/nodedb.c -lm
+
+.PHONY: test
+test: build-host/hosttest build-host/nodedb_test
+	./build-host/hosttest --mesh
+	./build-host/nodedb_test

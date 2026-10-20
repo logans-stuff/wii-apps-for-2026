@@ -12,6 +12,10 @@ MACHDEP := -DGEKKO -mrvl -mcpu=750 -meabi -mhard-float
 CFLAGS  := -O2 -Wall $(MACHDEP) -I$(DEVKITPRO)/libogc/include -I$(DEVKITPRO)/portlibs/ppc/include -I$(ROOT)/common $(APP_CFLAGS)
 LDFLAGS := $(MACHDEP) -L$(DEVKITPRO)/libogc/lib/wii -L$(DEVKITPRO)/portlibs/ppc/lib
 
+# Machine-local build overrides (for example DEBUG_HOST).  This file is
+# intentionally untracked and optional.
+-include $(ROOT)/local.mk
+
 OBJ := $(patsubst source/%.c,build/%.o,$(APP_SRC))
 
 ifeq ($(USE_WOLFSSL),1)
@@ -43,14 +47,11 @@ endif
 GRR := $(ROOT)/third_party/GRRLIB/GRRLIB/GRRLIB
 ifeq ($(USE_GRRLIB),1)
   CFLAGS += -I$(GRR) -I$(GRR)/../lib/pngu -I$(DEVKITPRO)/portlibs/ppc/include/freetype2
-  # GRRLIB + pngu for PNG tile loading, but WITHOUT the TTF path: we use the
-  # built-in bitmap font (GRRLIB_PrintfSystemFont), so no freetype -> a much
-  # smaller .dol that writes to SD and transfers reliably. GRRLIB_InitTTF /
-  # GRRLIB_ExitTTF are stubbed in the app.
-  GRR_SRC := $(filter-out %GRRLIB_ttf.c,$(wildcard $(GRR)/*.c))
-  GRR_OBJ := $(patsubst %.c,build/grrlib/%.o,$(notdir $(GRR_SRC))) build/grrlib/pngu.o
+  # All of GRRLIB plus pngu: retain the proven TTF startup path while also
+  # enabling PNG tile loading for the offline map.
+  GRR_OBJ := $(patsubst %.c,build/grrlib/%.o,$(notdir $(wildcard $(GRR)/*.c))) build/grrlib/pngu.o
   OBJ += $(GRR_OBJ)
-  GRR_LIBS := -lpng16 -ljpeg -lz
+  GRR_LIBS := -lfreetype -lpng16 -ljpeg -lbz2 -lbrotlidec -lbrotlicommon -lz
 endif
 
 build/$(APP).dol: build/$(APP).elf

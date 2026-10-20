@@ -21,7 +21,10 @@
 #define EP_OUT 0x02
 #define EP_IN 0x82
 #define PKT 32
+#define SPI_MAX 300
+#define IOBUF_SIZE (SPI_MAX + (SPI_MAX + PKT - 2) / (PKT - 1))
 
+volatile const char *ch341_stage = "idle";
 static s32 fd;
 static int is_open, cs;
 static uint8_t dir_bits, out_bits;
@@ -39,8 +42,10 @@ static int out(const uint8_t *data, int len)
 {
     s32 r;
     memcpy(iobuf, data, (size_t)len);
-    DCFlushRange(iobuf, PKT);
+    DCFlushRange(iobuf, IOBUF_SIZE);
+    ch341_stage = "out";
     r = USB_WriteBlkMsg(fd, EP_OUT, (u16)len, iobuf);
+    ch341_stage = "idle";
     if (dbgn < 12)
         dbg("ch341 OUT ep=%02x len=%d rc=%d [%02x %02x %02x %02x]", EP_OUT, len,
             (int)r, data[0], len > 1 ? data[1] : 0, len > 2 ? data[2] : 0,
@@ -53,17 +58,20 @@ static int in(uint8_t *data, int len)
 {
     int got = 0, tries = 0;
 
-    while (got < len && tries++ < 8) {
+    while (got < len && tries++ < 16) {
         s32 n;
-        DCInvalidateRange(iobuf, PKT);
-        n = USB_ReadBlkMsg(fd, EP_IN, (u16)(len - got), iobuf);
+        int want = len - got > PKT - 1 ? PKT - 1 : len - got;
+        DCInvalidateRange(iobuf, IOBUF_SIZE);
+        ch341_stage = "in";
+        n = USB_ReadBlkMsg(fd, EP_IN, (u16)want, iobuf);
+        ch341_stage = "idle";
         if (dbgn < 12)
             dbg("ch341 IN  ep=%02x want=%d rc=%d got=%d [%02x %02x %02x %02x %02x %02x]",
                 EP_IN, len - got, (int)n, got, iobuf[0], iobuf[1], iobuf[2],
                 iobuf[3], iobuf[4], iobuf[5]);
         if (n < 0)
             return -1;
-        DCInvalidateRange(iobuf, PKT);
+        DCInvalidateRange(iobuf, IOBUF_SIZE);
         memcpy(data + got, iobuf, (size_t)n);
         got += n;
     }
@@ -101,25 +109,30 @@ int ch341_read_pin(int pin)
 
 int ch341_spi(const uint8_t *tx, uint8_t *rx, int len)
 {
-    uint8_t pkt[PKT], back[PKT];
-    int off = 0, rc = 0;
+    uint8_t wire[IOBUF_SIZE], back[SPI_MAX];
+    int off = 0, wlen = 0, rc = 0;
 
-    if (!is_open || ch341_write_pin(cs, 0) != 0)
+    if (!is_open || len < 0 || len > SPI_MAX || ch341_write_pin(cs, 0) != 0)
         return -1;
+
+    /* A transfer longer than one USB packet must be submitted as one bulk
+     * write containing consecutive 0xA8 + 31-byte packets.  Sending and
+     * reading each packet synchronously makes the CH341 drop one SPI byte at
+     * every packet boundary; on Meshtastic frames that boundary lands in the
+     * longitude field.  This is the same packet layout used by flashrom's
+     * CH341A driver. */
     while (off < len) {
         int n = len - off > PKT - 1 ? PKT - 1 : len - off, i;
-        pkt[0] = 0xA8;
+        wire[wlen++] = 0xA8;
         for (i = 0; i < n; i++)
-            pkt[1 + i] = rev(tx[off + i]);
-        if (out(pkt, n + 1) != 0 || in(back, n) != 0) {
-            rc = -1;
-            break;
-        }
-        if (rx != NULL)
-            for (i = 0; i < n; i++)
-                rx[off + i] = rev(back[i]);
+            wire[wlen++] = rev(tx[off + i]);
         off += n;
     }
+    if (out(wire, wlen) != 0 || in(back, len) != 0)
+        rc = -1;
+    else if (rx != NULL)
+        for (off = 0; off < len; off++)
+            rx[off] = rev(back[off]);
     if (ch341_write_pin(cs, 1) != 0)
         rc = -1;
     return rc;
@@ -133,7 +146,7 @@ int ch341_open(int cs_pin, unsigned out_mask, char *info, size_t infolen, char *
 
     ch341_close();
     if (iobuf == NULL)
-        iobuf = memalign(32, PKT);
+        iobuf = memalign(32, IOBUF_SIZE);
     if (iobuf == NULL) {
         snprintf(err, errlen, "out of memory");
         return -1;

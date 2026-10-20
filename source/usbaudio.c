@@ -20,7 +20,10 @@ struct stream {
     int iface, alt, ep, maxpkt, channels, bits;
 };
 
-static s32 fd = -1;
+/* In USBV5 mode a handle is the IOS device id, and many ids are negative
+ * as s32 (for example 0xe71e0021). So "open" is a separate flag. */
+static s32 fd, mic_fd, spk_fd;      /* control; one IOS device per interface */
+static int fd_open, mic_open, spk_open;
 static struct stream mic, spk;
 static u8 *iso_buf;
 static u16 *iso_sizes;
@@ -56,11 +59,42 @@ static void parse_config(const u8 *b, int n)
     }
 }
 
-static int set_alt(int iface, int alt)
+/* Set the alternate setting through IOS (USBV5 IOCTL 7 on /dev/usb/ven):
+ * IOS must know the setting, or it refuses iso transfers on the endpoint
+ * (IPC_EINVAL). The buffer has the device id at byte 0 and the setting at
+ * byte 8, as Dolphin's USBV5 code reads it. */
+static int set_alt(s32 dev, int alt)
 {
-    return USB_WriteCtrlMsg(fd, USB_CTRLTYPE_DIR_HOST2DEVICE | USB_CTRLTYPE_TYPE_STANDARD
-                            | USB_CTRLTYPE_REC_INTERFACE, USB_REQ_SETINTERFACE,
-                            (u16)alt, (u16)iface, 0, NULL);
+    static s32 ven = -1;
+    s32 *buf, ret;
+
+    if (ven < 0)
+        ven = IOS_Open("/dev/usb/ven", 0);
+    if (ven < 0)
+        return ven;
+    buf = memalign(32, 32);
+    if (buf == NULL)
+        return -1;
+    memset(buf, 0, 32);
+    buf[0] = dev;
+    ((u8 *)buf)[8] = (u8)alt;
+    ret = IOS_Ioctl(ven, 7, buf, 32, NULL, 0);
+    free(buf);
+    return ret;
+}
+
+/* Interface number of one IOS device entry, or -1. */
+static int iface_of(s32 dev)
+{
+    usb_devdesc udd;
+    int n = -1;
+
+    memset(&udd, 0, sizeof(udd));
+    if (USB_GetDescriptors(dev, &udd) >= 0 && udd.configurations != NULL
+        && udd.configurations[0].interfaces != NULL)
+        n = udd.configurations[0].interfaces[0].bInterfaceNumber;
+    USB_FreeDescriptors(&udd);
+    return n;
 }
 
 int ua_open(char *info, size_t infolen, char *err, size_t errlen)
@@ -84,13 +118,11 @@ int ua_open(char *info, size_t infolen, char *err, size_t errlen)
         free(cfg);
         return -1;
     }
-    for (i = 0; i < cnt && fd < 0; i++) {
+    for (i = 0; i < cnt && !fd_open; i++) {
         memset(&mic, 0, sizeof(mic));
         memset(&spk, 0, sizeof(spk));
-        if (USB_OpenDevice(list[i].device_id, list[i].vid, list[i].pid, &fd) < 0) {
-            fd = -1;
+        if (USB_OpenDevice(list[i].device_id, list[i].vid, list[i].pid, &fd) < 0)
             continue;
-        }
         memset(cfg, 0, 1024);
         ret = USB_WriteCtrlMsg(fd, USB_CTRLTYPE_DIR_DEVICE2HOST, USB_REQ_GETDESCRIPTOR,
                                USB_DT_CONFIG << 8, 0, 9, cfg);
@@ -103,40 +135,66 @@ int ua_open(char *info, size_t infolen, char *err, size_t errlen)
         parse_config(cfg, total);
         if (mic.ep == 0 && spk.ep == 0) {
             USB_CloseDevice(&fd);
-            fd = -1;
             continue;
         }
+        fd_open = 1;
         snprintf(info, infolen, "%04x:%04x mic ep %02x %d ch %d bit, headphones ep %02x %d ch %d bit",
                  list[i].vid, list[i].pid, mic.ep, mic.channels, mic.bits, spk.ep,
                  spk.channels, spk.bits);
     }
     free(cfg);
-    if (fd < 0) {
+    if (!fd_open) {
         snprintf(err, errlen, "no USB audio headset found");
         return -1;
     }
     dbg("ua: %s", info);
+    /* Find the IOS entry of the mic and of the headphone interfaces. */
+    for (i = 0; i < cnt; i++) {
+        s32 dev;
+        int n;
+        if (USB_OpenDevice(list[i].device_id, list[i].vid, list[i].pid, &dev) < 0)
+            continue;
+        n = iface_of(dev);
+        dbg("ua: entry %08x is interface %d", (unsigned)list[i].device_id, n);
+        if (n == mic.iface && mic.ep && !mic_open) {
+            mic_fd = dev;
+            mic_open = 1;
+        } else if (n == spk.iface && spk.ep && !spk_open) {
+            spk_fd = dev;
+            spk_open = 1;
+        } else if (dev != fd) {
+            USB_CloseDevice(&dev);
+        }
+    }
+    if (!mic_open)
+        mic_fd = fd;
+    if (!spk_open)
+        spk_fd = fd;
     if (mic.ep) {
-        ret = set_alt(mic.iface, mic.alt);
-        dbg("ua: mic set_alt(%d,%d) = %d", mic.iface, mic.alt, (int)ret);
+        ret = set_alt(mic_fd, mic.alt);
+        dbg("ua: mic set_alt(%08x, %d) = %d", (unsigned)mic_fd, mic.alt, (int)ret);
     }
     if (spk.ep) {
-        ret = set_alt(spk.iface, spk.alt);
-        dbg("ua: spk set_alt(%d,%d) = %d", spk.iface, spk.alt, (int)ret);
+        ret = set_alt(spk_fd, spk.alt);
+        dbg("ua: spk set_alt(%08x, %d) = %d", (unsigned)spk_fd, spk.alt, (int)ret);
     }
     return 0;
 }
 
 void ua_close(void)
 {
-    if (fd >= 0) {
-        if (mic.ep)
-            set_alt(mic.iface, 0);
-        if (spk.ep)
-            set_alt(spk.iface, 0);
-        USB_CloseDevice(&fd);
-    }
-    fd = -1;
+    if (!fd_open)
+        return;
+    if (mic.ep)
+        set_alt(mic_fd, 0);
+    if (spk.ep)
+        set_alt(spk_fd, 0);
+    if (mic_open && mic_fd != fd)
+        USB_CloseDevice(&mic_fd);
+    if (spk_open && spk_fd != fd)
+        USB_CloseDevice(&spk_fd);
+    USB_CloseDevice(&fd);
+    fd_open = mic_open = spk_open = 0;
 }
 
 int ua_record(int16_t *out, int max_samples)
@@ -145,7 +203,7 @@ int ua_record(int16_t *out, int max_samples)
     int bytes = frame * (mic.bits / 8) * mic.channels;
     static int logged;
 
-    if (fd < 0 || mic.ep == 0 || bytes <= 0 || bytes > 512)
+    if (!fd_open || mic.ep == 0 || bytes <= 0 || bytes > 512)
         return -1;
     while (got + frame * ISO_PACKETS <= max_samples) {
         s32 ret;
@@ -153,7 +211,7 @@ int ua_record(int16_t *out, int max_samples)
         for (p = 0; p < ISO_PACKETS; p++)
             iso_sizes[p] = (u16)bytes;
         DCFlushRange(iso_sizes, 32);
-        ret = USB_ReadIsoMsg(fd, (u8)mic.ep, ISO_PACKETS, iso_sizes, iso_buf);
+        ret = USB_ReadIsoMsg(mic_fd, (u8)mic.ep, ISO_PACKETS, iso_sizes, iso_buf);
         if (!logged) {
             dbg("ua: first iso read = %d, sizes %u %u", (int)ret, iso_sizes[0], iso_sizes[1]);
             logged = 1;
@@ -180,7 +238,7 @@ int ua_play(const int16_t *in, int samples)
     int bytes = frame * (spk.bits / 8) * spk.channels;
     static int logged;
 
-    if (fd < 0 || spk.ep == 0 || bytes <= 0 || bytes > 512)
+    if (!fd_open || spk.ep == 0 || bytes <= 0 || bytes > 512)
         return -1;
     while (done + frame * ISO_PACKETS <= samples) {
         s32 ret;
@@ -198,7 +256,7 @@ int ua_play(const int16_t *in, int samples)
         }
         DCFlushRange(iso_sizes, 32);
         DCFlushRange(iso_buf, ISO_PACKETS * 512);
-        ret = USB_WriteIsoMsg(fd, (u8)spk.ep, ISO_PACKETS, iso_sizes, iso_buf);
+        ret = USB_WriteIsoMsg(spk_fd, (u8)spk.ep, ISO_PACKETS, iso_sizes, iso_buf);
         if (!logged) {
             dbg("ua: first iso write = %d", (int)ret);
             logged = 1;

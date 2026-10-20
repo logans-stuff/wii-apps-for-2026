@@ -34,7 +34,7 @@ static void video_start(void)
 
 int main(void)
 {
-    static int16_t chunk[48 * 8];
+    static int16_t chunk[48 * 32];
     int16_t *rec = malloc(MAX_SAMPLES * sizeof(int16_t));
     char info[200] = "", err[200] = "";
 
@@ -67,8 +67,8 @@ int main(void)
         if (held & WPAD_BUTTON_A) {
             int n = 0, peak = 0, i;
             printf("\x1b[10;1HRecording...                          ");
-            while (n + 48 * 8 <= MAX_SAMPLES) {
-                int got = ua_record(chunk, 48 * 8);
+            while (n + 48 * 32 <= MAX_SAMPLES) {
+                int got = ua_record(chunk, 48 * 32);
                 if (got < 0) {
                     printf("\x1b[11;1Hrecord error %d\n", got);
                     dbg("headset: record error %d", got);
@@ -88,8 +88,13 @@ int main(void)
             printf("\x1b[10;1HRecorded %.1f s, peak level %d of 32767.   \n",
                    (double)n / UA_RATE, peak);
             dbg("headset: recorded %d samples, peak %d", n, peak);
+            {
+                unsigned long long t0 = net_ms();
+                i = ua_play(rec, n);
+                dbg("headset: played %d samples (%.1f s of sound) in %llu ms, rc %d", n,
+                    (double)n / UA_RATE, net_ms() - t0, i);
+            }
             printf("\x1b[11;1HPlaying...                              ");
-            i = ua_play(rec, n);
             printf("\x1b[11;1H%s                                 \n",
                    i == 0 ? "Played. Hold A to record again." : "play error");
             dbg("headset: play rc %d", i);

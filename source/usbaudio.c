@@ -14,7 +14,10 @@
 #include "net.h"
 #include "usbaudio.h"
 
-#define ISO_PACKETS 8          /* 8 ms for each IOS call */
+/* Packets (ms) for each IOS call. Each call costs time, so a larger call
+ * keeps the sound without gaps. ua_open tries ISO_MAX first. */
+#define ISO_MAX 32
+static int iso_packets = ISO_MAX;
 
 struct stream {
     int iface, alt, ep, maxpkt, channels, bits;
@@ -98,8 +101,8 @@ int ua_open(char *info, size_t infolen, char *err, size_t errlen)
         return -1;
     }
     cfg = memalign(32, 1024);
-    iso_buf = memalign(32, ISO_PACKETS * 512);
-    iso_sizes = memalign(32, 32);
+    iso_buf = memalign(32, ISO_MAX * 512);
+    iso_sizes = memalign(32, 2 * ISO_MAX + 32);
     if (cfg == NULL || iso_buf == NULL || iso_sizes == NULL) {
         snprintf(err, errlen, "out of memory");
         free(cfg);
@@ -192,27 +195,35 @@ int ua_record(int16_t *out, int max_samples)
 
     if (!fd_open || mic.ep == 0 || bytes <= 0 || bytes > 512)
         return -1;
-    while (got + frame * ISO_PACKETS <= max_samples) {
+    while (got + frame * iso_packets <= max_samples) {
         s32 ret;
-        int p, s;
-        for (p = 0; p < ISO_PACKETS; p++)
+        int p, s, off = 0;
+        unsigned long long t0 = net_ms();
+        for (p = 0; p < iso_packets; p++)
             iso_sizes[p] = (u16)bytes;
-        DCFlushRange(iso_sizes, 32);
-        ret = USB_ReadIsoMsg(mic_fd, (u8)mic.ep, ISO_PACKETS, iso_sizes, iso_buf);
-        if (!logged) {
-            dbg("ua: first iso read = %d, sizes %u %u", (int)ret, iso_sizes[0], iso_sizes[1]);
-            logged = 1;
+        DCFlushRange(iso_sizes, 2 * ISO_MAX + 32);
+        ret = USB_ReadIsoMsg(mic_fd, (u8)mic.ep, (u8)iso_packets, iso_sizes, iso_buf);
+        if (ret < 0 && iso_packets > 8) {
+            dbg("ua: iso read with %d packets = %d, trying 8", iso_packets, (int)ret);
+            iso_packets = 8;
+            continue;
         }
         if (ret < 0)
             return got > 0 ? got : (int)ret;
-        DCInvalidateRange(iso_buf, ISO_PACKETS * 512);
-        /* Packets are packed one after the other at the requested size. */
-        for (p = 0; p < ISO_PACKETS; p++) {
-            const u8 *src = iso_buf + p * bytes;
+        DCInvalidateRange(iso_sizes, 2 * ISO_MAX + 32);
+        DCInvalidateRange(iso_buf, ISO_MAX * 512);
+        if (logged < 3) {
+            dbg("ua: iso read %d pkts = %d in %llu ms, sizes %u %u %u", iso_packets, (int)ret,
+                net_ms() - t0, iso_sizes[0], iso_sizes[1], iso_sizes[2]);
+            logged++;
+        }
+        /* The data of each packet starts at the requested offset. */
+        for (p = 0; p < iso_packets; p++, off += bytes) {
+            int n = iso_sizes[p] <= bytes ? iso_sizes[p] / (2 * mic.channels) : frame;
+            const u8 *src = iso_buf + off;
             for (s = 0; s < frame; s++) {
-                /* little-endian 16-bit; channel 0 only */
                 const u8 *x = src + s * 2 * mic.channels;
-                out[got++] = (int16_t)(x[0] | (x[1] << 8));
+                out[got++] = s < n ? (int16_t)(x[0] | (x[1] << 8)) : 0;
             }
         }
     }
@@ -227,10 +238,11 @@ int ua_play(const int16_t *in, int samples)
 
     if (!fd_open || spk.ep == 0 || bytes <= 0 || bytes > 512)
         return -1;
-    while (done + frame * ISO_PACKETS <= samples) {
+    while (done + frame * iso_packets <= samples) {
         s32 ret;
         int p, s, c;
-        for (p = 0; p < ISO_PACKETS; p++) {
+        unsigned long long t0 = net_ms();
+        for (p = 0; p < iso_packets; p++) {
             u8 *dst = iso_buf + p * bytes;
             iso_sizes[p] = (u16)bytes;
             for (s = 0; s < frame; s++) {
@@ -241,16 +253,16 @@ int ua_play(const int16_t *in, int samples)
                 }
             }
         }
-        DCFlushRange(iso_sizes, 32);
-        DCFlushRange(iso_buf, ISO_PACKETS * 512);
-        ret = USB_WriteIsoMsg(spk_fd, (u8)spk.ep, ISO_PACKETS, iso_sizes, iso_buf);
-        if (!logged) {
-            dbg("ua: first iso write = %d", (int)ret);
-            logged = 1;
+        DCFlushRange(iso_sizes, 2 * ISO_MAX + 32);
+        DCFlushRange(iso_buf, ISO_MAX * 512);
+        ret = USB_WriteIsoMsg(spk_fd, (u8)spk.ep, (u8)iso_packets, iso_sizes, iso_buf);
+        if (logged < 3) {
+            dbg("ua: iso write %d pkts = %d in %llu ms", iso_packets, (int)ret, net_ms() - t0);
+            logged++;
         }
         if (ret < 0)
             return (int)ret;
-        done += frame * ISO_PACKETS;
+        done += frame * iso_packets;
     }
     return 0;
 }

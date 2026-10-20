@@ -162,10 +162,8 @@ int ua_open(char *info, size_t infolen, char *err, size_t errlen)
         ret = set_alt(mic_fd, mic.alt);
         dbg("ua: mic set_alt(%08x, %d) = %d", (unsigned)mic_fd, mic.alt, (int)ret);
     }
-    if (spk.ep) {
-        ret = set_alt(spk_fd, spk.alt);
-        dbg("ua: spk set_alt(%08x, %d) = %d", (unsigned)spk_fd, spk.alt, (int)ret);
-    }
+    /* The headphones are switched on only while they play (ua_play).
+     * A headset that stays on with no data can buzz. */
     return 0;
 }
 
@@ -288,7 +286,30 @@ int ua_record(int16_t *out, int max_samples, int (*keep_going)(void))
     }
 }
 
+static int play_raw(const int16_t *in, int samples);
+
+/* Play with the headphones switched on only for this sound: 64 ms of
+ * silence first (the first packets after the switch are lost), the sound,
+ * 32 ms of silence, then off. */
 int ua_play(const int16_t *in, int samples)
+{
+    static int16_t silence[48 * 64];
+    s32 ret;
+    int rc;
+
+    if (!fd_open || spk.ep == 0)
+        return -1;
+    ret = set_alt(spk_fd, spk.alt);
+    dbg("ua: spk on = %d", (int)ret);
+    play_raw(silence, 48 * 64);
+    rc = play_raw(in, samples);
+    play_raw(silence, 48 * 32);
+    ret = set_alt(spk_fd, 0);
+    dbg("ua: spk off = %d", (int)ret);
+    return rc;
+}
+
+static int play_raw(const int16_t *in, int samples)
 {
     int frame = UA_RATE / 1000, done = 0, k = 0, i;
     int bytes = frame * (spk.bits / 8) * spk.channels;

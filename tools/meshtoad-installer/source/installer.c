@@ -1,6 +1,6 @@
 /* One-shot installer: writes an HBC app (and, for Meshtoad, offline map
  * tiles) to sd:/apps/<INSTALL_APP>/. Send it once with wiiload; it does the
- * rest. Also built for meshtasticd by tools/meshtasticd-installer. */
+ * rest. */
 #include <stdio.h>
 #include <string.h>
 

@@ -9,6 +9,7 @@ Each app lives under `apps/` (or `tools/`), shares the plumbing in
 | App | Build | What it is |
 |---|---|---|
 | **Meshtoad LoRa node** | `apps/meshtoad` | A two-way [Meshtastic](https://meshtastic.org) node: an SX1262 radio over a CH341 USB-to-SPI bridge (a USB "Meshtoad"). Listens, decrypts the channel (AES-CTR) and decodes packets (text, node info, position), and transmits — the Wii joins the mesh. |
+| **Meshtastic firmware** | *moved* | The real Meshtastic firmware (2.8.1) with MeshtasticUI, running natively on the Wii with a USB Meshtoad. It started here as `apps/meshtasticd` and now lives in **[logans-stuff/wii-meshtastic](https://github.com/logans-stuff/wii-meshtastic)**, along with the firmware notes (`docs/meshtastic-2.8.1-notes.md`). |
 | **USB headset driver** | `apps/usb-headset` | USB Audio Class 1.0 record/playback (48 kHz) with an Opus round-trip test, tested with a Razer BlackShark V2 Pro. See `apps/usb-headset/source/usbaudio.h`. |
 | **Sonoran** | `apps/sonoran` | A chat/nodes client that does its own TLS (wolfSSL), so the Wii's old roots don't matter. |
 | **USB probe** | `tools/usbprobe` | Dumps USB descriptors to a debug log — used to bring up the USB drivers. |

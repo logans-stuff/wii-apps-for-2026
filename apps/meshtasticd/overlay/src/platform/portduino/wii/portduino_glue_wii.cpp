@@ -181,6 +181,14 @@ void randomSeed(unsigned long seed)
 }
 // No in-process restart: return to the Homebrew Channel. Power::reboot() has
 // already let modules persist their state.
+// Quitting with Home/Reset skips the firmware's reboot path, which is where
+// positions, telemetry and last-heard of the NodeDB get written. Do the same.
+extern "C" void wii_save_state(void)
+{
+    if (nodeDB)
+        nodeDB->saveToDisk(); // config, module config, device state, channels, NodeDB
+}
+
 extern "C" void wii_debuglog_stop();
 void reboot()
 {

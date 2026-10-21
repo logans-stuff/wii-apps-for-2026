@@ -122,12 +122,19 @@ int main(void)
         if (recv_all(fd, rel, plen) < 0) break;
         rel[plen] = '\0';
         compressed_boot = strcmp(rel, "boot.dol.z") == 0;
-        if ((strncmp(rel, "tiles/", 6) != 0 && strcmp(rel, "boot.dol") != 0 &&
-             !compressed_boot &&
-             strcmp(rel, "meta.xml") != 0 && strcmp(rel, "icon.png") != 0) ||
-            strstr(rel, "..") != NULL) break;
-        snprintf(path, sizeof(path), "sd:/apps/meshtoad/%s",
-                 compressed_boot ? "boot.dol" : rel);
+        if (strstr(rel, "..") != NULL)
+            break;
+        if (strncmp(rel, "/apps/meshtasticd/maps/", 23) == 0) {
+            /* MUI map tiles for the firmware port, written where MUI
+             * looks: its /maps is sd:/apps/meshtasticd/maps */
+            snprintf(path, sizeof(path), "sd:%s", rel);
+        } else if (strncmp(rel, "tiles/", 6) == 0 || strcmp(rel, "boot.dol") == 0 || compressed_boot ||
+                   strcmp(rel, "meta.xml") == 0 || strcmp(rel, "icon.png") == 0) {
+            snprintf(path, sizeof(path), "sd:/apps/meshtoad/%s",
+                     compressed_boot ? "boot.dol" : rel);
+        } else {
+            break;
+        }
         make_parents(path);
         if (compressed_boot) {
             unsigned packed_len = left, raw_len;

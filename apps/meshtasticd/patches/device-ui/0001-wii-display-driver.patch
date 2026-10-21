@@ -114,6 +114,36 @@ index 97722db..3b5f2dc 100644
 +};
 +
 +#endif
+diff --git a/include/graphics/map/pmtiles.hpp b/include/graphics/map/pmtiles.hpp
+index 37df545..6e82f5f 100644
+--- a/include/graphics/map/pmtiles.hpp
++++ b/include/graphics/map/pmtiles.hpp
+@@ -45,6 +45,7 @@
+ #include <cstring>
+ #include <limits>
+ #include <new>
++#include <type_traits>
+ #include <vector>
+ 
+ namespace pmtiles
+@@ -129,10 +130,15 @@ struct entryv3 {
+ 
+ using directory = std::vector<entryv3, PsramAllocator<entryv3>>;
+ 
+-// WARNING: this is limited to little-endian
++// PMTiles header fields are little-endian; assemble them byte by byte so
++// big-endian hosts (the Wii's PowerPC) read the same values.
+ template <class T> inline void copy_from_lsb(T *ptr, const uint8_t *data, size_t offset)
+ {
+-    memcpy(ptr, data + offset, sizeof(T));
++    using U = typename std::make_unsigned<T>::type;
++    U v = 0;
++    for (size_t i = 0; i < sizeof(T); i++)
++        v |= static_cast<U>(data[offset + i]) << (8 * i);
++    *ptr = static_cast<T>(v);
+ }
+ 
+ inline bool deserialize_header(const uint8_t *data, size_t len, headerv3 &h)
 diff --git a/include/lv_conf.h b/include/lv_conf.h
 index 0e1ca87..ec31064 100644
 --- a/include/lv_conf.h
@@ -664,3 +694,20 @@ index 7cc757d..ab843ca 100644
 +}
 +
 +#endif
+diff --git a/source/util/Gunzip.cpp b/source/util/Gunzip.cpp
+index 2ad78bd..b70355e 100644
+--- a/source/util/Gunzip.cpp
++++ b/source/util/Gunzip.cpp
+@@ -28,8 +28,10 @@ uint8_t *decompressGzip(const uint8_t *compressedData, size_t length, size_t &de
+         return nullptr;
+     }
+ 
+-    uint32_t isize = 0;
+-    memcpy(&isize, &compressedData[length - 4], sizeof(isize)); // trailer is not guaranteed to be aligned
++    // ISIZE is little-endian and not guaranteed to be aligned: assemble it byte-wise
++    const uint8_t *trailer = &compressedData[length - 4];
++    uint32_t isize = (uint32_t)trailer[0] | ((uint32_t)trailer[1] << 8) | ((uint32_t)trailer[2] << 16) |
++                     ((uint32_t)trailer[3] << 24);
+     if (isize == 0 || isize > GZIP_MAX_OUTPUT) {
+         ILOG_ERROR("gunzip: uncompressed size (%u bytes)", (unsigned int)isize);
+         return nullptr;

@@ -29,6 +29,7 @@ extern "C" GXRModeObj *wii_rmode = nullptr;
 extern "C" volatile int wii_ui_active = 0;
 extern "C" int wii_debuglog_detach_console(void);
 extern "C" void wii_tft_tick(void);
+extern "C" void wii_save_state(void);
 
 static void console_start()
 {
@@ -117,28 +118,31 @@ static void *quit_watch(void *)
             if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME)
                 g_quit = true;
         }
-        if (g_quit && (waited += 100) >= 3000)
+        // Stuck after a quit request: exit for it, but give a save in
+        // progress (prefs + NodeDB on SD) time to finish first.
+        if (g_quit && (waited += 100) >= (strcmp(g_stage, "saving") == 0 ? 15000 : 3000))
             exit(0);
         usleep(100 * 1000);
     }
     return NULL;
 }
 
-// Seed config.txt from loader arguments (wiiload file.dol preset=MEDIUM_FAST
-// slot=18 ...) when the SD card has none yet, so a first boot can join a mesh.
+// key=value loader arguments (send.sh <ip> preset=MEDIUM_FAST slot=18 ...)
+// replace config.txt. The Homebrew Channel passes wiiload's arguments from
+// argv[0] on (no program name first), so every argv entry is considered. Only the keys in it are (re)applied, everything else
+// stays as the firmware saved it, so this is how settings change remotely.
 static void seed_config(int argc, char **argv)
 {
-    if (argc < 2)
+    bool any = false;
+    for (int i = 0; i < argc; i++)
+        any |= strchr(argv[i], '=') != nullptr;
+    if (!any)
         return;
-    if (FILE *f = fopen("sd:/apps/meshtasticd/config.txt", "r")) {
-        fclose(f);
-        return;
-    }
     FILE *f = fopen("sd:/apps/meshtasticd/config.txt", "w");
     if (!f)
         return;
-    fputs("# written from the loader arguments on first boot\n", f);
-    for (int i = 1; i < argc; i++)
+    fputs("# written from the loader arguments\n", f);
+    for (int i = 0; i < argc; i++)
         if (strchr(argv[i], '='))
             fprintf(f, "%s\n", argv[i]);
     fclose(f);
@@ -177,6 +181,8 @@ int main(int argc, char **argv)
         wii_tft_tick(); // MUI (device-ui / LVGL)
         wii_config_tick();
     }
+    g_stage = "saving";
+    wii_save_state(); // what the firmware's reboot path would have saved
     wii_debuglog_stop();
     exit(0);
 }

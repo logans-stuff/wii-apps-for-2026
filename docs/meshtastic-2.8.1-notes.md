@@ -377,3 +377,29 @@ and the Wiimote IR pointer is the touchscreen.
 - **Sending**: the MUI build is ~3.6 MB, too big for plain wiiload on the
   Wii's Wi-Fi. `apps/meshtasticd/send.sh <wii-ip>` goes through
   `tools/wiiload_relay.py` (536-byte segments).
+
+## Offline maps on the Wii (MUI)
+
+- **Where MUI looks**: MUI's `/` is `sd:/apps/meshtasticd`, so styles live in
+  `sd:/apps/meshtasticd/maps/<style>/`. That folder holds either `z/x/y.png`
+  tiles or one `<style>.pmtiles` file. Long-press Map to choose a style.
+- **Use a whole-state PMTiles bundle, not a hand-picked tile set.** Arizona
+  came from
+  `bundle.tiles.coalition.space/bundles/arizona/arizona-osm-bright-z0-z15-20261003.pmtiles`:
+  1.29 GB, PNG, z0-15, ~405k tiles, and it fits a 4 GB card. A small z8-14
+  set built around a guessed centre missed the node's real position.
+- **Two more big-endian bugs**, both reading little-endian file integers
+  with `memcpy`:
+  - pmtiles.hpp `copy_from_lsb` (header and directory varints);
+  - `util/Gunzip.cpp`, the gzip ISIZE trailer. A 2094-byte tile read as
+    772 MB, and every tile was rejected (`gunzip: uncompressed size`).
+
+  Both now assemble the integer byte by byte. PNG decode and libdeflate are
+  endian-clean and decode a tile in 2-3 ms.
+- **HBC passes wiiload arguments starting at argv[0]**, with no program
+  name first. `seed_config` used to skip argv[0] and lost the first
+  `key=value`, so the fixed latitude became 0 and the map opened on London.
+- **Save on quit**: Home and Reset end the main loop, so it calls
+  `nodeDB->saveToDisk()` before `exit(0)`. Otherwise nodes heard since the
+  last periodic save are lost. The watchdog allows 15 s for the "saving"
+  stage.

@@ -17,6 +17,9 @@ def main() -> int:
                         help="maximum number of tiles to send")
     parser.add_argument("--suffix", default=".png",
                         help="tile filename suffix to send")
+    parser.add_argument("--dest", default="tiles",
+                        help="destination prefix: 'tiles' (Meshtoad) or e.g. "
+                             "/apps/meshtasticd/maps/OSM (MUI style folder)")
     args = parser.parse_args()
     files = sorted(args.tiles.rglob(f"*{args.suffix}"))
     if not files:
@@ -34,7 +37,7 @@ def main() -> int:
             print(f"Wii connected from {addr[0]}", flush=True)
             conn.sendall(b"MTIL" + struct.pack(">I", len(files)))
             for index, path in enumerate(files, 1):
-                rel = f"tiles/{path.relative_to(args.tiles).as_posix()}".encode()
+                rel = f"{args.dest.rstrip('/')}/{path.relative_to(args.tiles).as_posix()}".encode()
                 data = path.read_bytes()
                 conn.sendall(struct.pack(">HI", len(rel), len(data)) + rel + data)
                 if conn.recv(1) != b"\x01":

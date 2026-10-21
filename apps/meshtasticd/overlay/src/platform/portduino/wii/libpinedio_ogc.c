@@ -6,9 +6,11 @@
 //         answers one (reversed) byte per byte sent
 //   GPIO  0xAB, 0x80|levels(D0..D5), 0x40|directions(D0..D5), 0x20
 //   input 0xA0, then 6 bytes back; byte 0 = D0..D7
-// Unlike js/ch341.js, a multi-packet transfer is submitted as ONE bulk write
-// and then read back: on the Wii, a synchronous write/read per packet makes the
-// CH341 drop one SPI byte at every 32-byte boundary.
+// Like js/ch341.js and libch341, each 32-byte packet is written and its reply
+// read before the next. (Submitting a whole multi-packet transfer as one bulk
+// write deadlocks: the CH341 stops taking OUT data once a few unread replies
+// fill its IN buffer, e.g. on a 256-byte RX buffer read. The byte drops that
+// once seemed to call for it were really the MEM1 DMA problem below.)
 #include "libpinedio-usb.h"
 
 #include <malloc.h>
@@ -26,6 +28,8 @@
 #define WIRE_MAX (SPI_MAX + (SPI_MAX + PKT - 2) / (PKT - 1))
 
 static s32 fd = -1;
+// What the radio link is doing right now, for the main-loop watchdog.
+const char *volatile wii_usb_stage = "idle";
 static uint8_t dir_bits, out_bits;
 // Separate 32-byte aligned DMA buffers per direction. With one shared buffer a
 // short IN transfer could hand back the OUT bytes still sitting in it (the
@@ -45,7 +49,9 @@ static int usb_out(const uint8_t *data, int len)
     s32 r;
     memcpy(outbuf, data, (size_t)len);
     DCFlushRange(outbuf, DMA_SIZE);
+    wii_usb_stage = "bulk OUT";
     r = USB_WriteBlkMsg(fd, EP_OUT, (u16)len, outbuf);
+    wii_usb_stage = "idle";
     if (r < 0)
         printf("ch341: bulk OUT %d bytes failed (%d)\n", len, (int)r);
     return r < 0 ? -1 : 0;
@@ -74,7 +80,9 @@ static int usb_in(uint8_t *data, int len)
         s32 n;
         memset(inbuf, 0xEE, PKT);
         DCFlushRange(inbuf, DMA_SIZE);
+        wii_usb_stage = "bulk IN";
         n = USB_ReadBlkMsg(fd, EP_IN, PKT, inbuf);
+        wii_usb_stage = "idle";
         if (n < 0) {
             printf("ch341: bulk IN failed (%d) after %d/%d bytes\n", (int)n, got, len);
             return -1;
@@ -201,27 +209,26 @@ int32_t pinedio_set_cs(struct pinedio_inst *inst, bool active)
 
 int32_t pinedio_transceive(struct pinedio_inst *inst, uint8_t *write_buf, uint8_t *read_buf, uint32_t count)
 {
-    uint8_t wire[WIRE_MAX], back[SPI_MAX];
-    uint32_t off = 0, wlen = 0;
+    uint8_t pkt[PKT], back[PKT];
+    uint32_t off = 0;
     int auto_cs = inst->options[PINEDIO_OPTION_AUTO_CS] != 0, rc = 0;
 
-    if (count > SPI_MAX)
-        return -1;
     if (auto_cs && pinedio_set_cs(inst, true) != 0)
         return -1;
     while (off < count) {
         uint32_t n = count - off > PKT - 1 ? PKT - 1 : count - off, i;
-        wire[wlen++] = 0xA8;
+        pkt[0] = 0xA8;
         for (i = 0; i < n; i++)
-            wire[wlen++] = rev(write_buf[off + i]);
+            pkt[1 + i] = rev(write_buf[off + i]);
+        if (usb_out(pkt, (int)n + 1) != 0 || usb_in(back, (int)n) != 0) {
+            inst->in_error = true;
+            rc = -1;
+            break;
+        }
+        if (read_buf != NULL)
+            for (i = 0; i < n; i++)
+                read_buf[off + i] = rev(back[i]);
         off += n;
-    }
-    if (usb_out(wire, (int)wlen) != 0 || usb_in(back, (int)count) != 0) {
-        inst->in_error = true;
-        rc = -1;
-    } else if (read_buf != NULL) {
-        for (off = 0; off < count; off++)
-            read_buf[off] = rev(back[off]);
     }
     if (auto_cs)
         pinedio_set_cs(inst, false);

@@ -88,13 +88,30 @@ extern "C" void __wrap_exit(int code)
 // radio init) is still running: the main loop gets 3 s to stop on its own
 // before the thread exits for it.
 static volatile bool g_quit;
+// Main-loop progress for the watchdog: a counter and the stage it is in.
+static volatile unsigned g_frames;
+static const char *volatile g_stage = "setup";
+extern "C" const char *volatile wii_usb_stage;
 static void reset_pressed(u32, void *) { g_quit = true; }
 extern "C" void wii_request_quit(void) { g_quit = true; }
 
 static void *quit_watch(void *)
 {
-    int waited = 0;
+    int waited = 0, stuck = 0;
+    unsigned last = 0;
     for (;;) {
+        // Watchdog: report where the main loop is when it stops advancing
+        // (logged from this thread, so it still reaches the debug stream).
+        if (g_frames == last && strcmp(g_stage, "setup") != 0) {
+            if (++stuck % 20 == 0) // every 2 s while stuck
+                printf("WATCHDOG main loop stuck %d s in %s (usb %s)\n", stuck / 10, g_stage,
+                       wii_usb_stage);
+        } else {
+            if (stuck >= 20)
+                printf("WATCHDOG main loop moving again after %d s\n", stuck / 10);
+            stuck = 0;
+            last = g_frames;
+        }
         if (!wii_ui_active) { // once MUI runs, its driver reads the Wiimote
             WPAD_ScanPads();
             if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME)
@@ -153,7 +170,10 @@ int main(int argc, char **argv)
     wii_default_region();
     wii_config_load(); // sd:/apps/meshtasticd/config.txt, via AdminMessages
     while (!g_quit) {
+        g_frames++;
+        g_stage = "firmware loop()";
         loop();
+        g_stage = "MUI tick";
         wii_tft_tick(); // MUI (device-ui / LVGL)
         wii_config_tick();
     }

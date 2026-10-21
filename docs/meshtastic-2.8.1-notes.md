@@ -344,3 +344,36 @@ flooding (hop limit 2->1, SNR-weighted delay).
   hangs. MeshService already drops the oldest entry of a full client queue.
 - **Exiting**: a watcher thread handles Home/Reset, because `setup()` can
   run for a minute. `exit()` is wrapped to log, flush and pause on errors.
+
+### MUI on the Wii (device-ui), and what it taught us
+
+MUI, the firmware's own LVGL UI (`meshtastic/device-ui`, pinned by 2.8.1's
+`[device-ui_base]`), runs in-process. Its 320x240 layout is drawn 2x into
+the TV's YUYV framebuffer by `WiiDriver` (`apps/meshtasticd/overlay-device-ui`),
+and the Wiimote IR pointer is the touchscreen.
+
+- **LVGL needs `LV_BIG_ENDIAN_SYSTEM 1`.** device-ui's `lv_conf.h` hardcodes
+  0, and `lv_init()` then fails its endianness assert, whose default handler
+  is `while(1)`: a silent hang at "LV init". Patched, and asserts now
+  `exit(70)`. (`lv_conf.h` is also included from assembly, so the
+  `stdlib.h` it needs goes in `LV_ASSERT_HANDLER_INCLUDE`.)
+- **Single-threaded**: `LV_OS_NONE`, no TFT `std::thread` (the main loop
+  calls `wii_tft_tick()`), no sleep in `DeviceGUI::task_handler`, and the tick
+  comes from `lv_tick_set_cb`.
+- **What's left out on the Wii**: LovyanGFX (SPI panels), SdFat (it refuses
+  big-endian, and portduino reads map tiles through `SDFs` = PortduinoFS
+  anyway), the libcurl online tile fallback, and the PWM backlight helper.
+- **MUI has no back key**: B is wired to its sidebar Home button.
+- **CH341: never submit a multi-packet SPI transfer as one bulk OUT.** The
+  CH341 holds only a few unread 31-byte replies, then NAKs OUT data. A
+  256-byte RX buffer read deadlocked inside `USB_WriteBlkMsg`, which is why
+  it froze right after `caught missed RX_DONE`. Write a packet, read its
+  reply, repeat (as libch341 and the WebUSB driver do). The "dropped byte at
+  each 32-byte boundary" that once motivated the single write was really the
+  MEM1 DMA problem.
+- **Watchdog**: the quit-watcher thread logs `WATCHDOG main loop stuck Ns in
+  <stage> (usb <bulk IN|OUT|idle>)` when the loop stalls. That's how the
+  deadlock above was found on the first try.
+- **Sending**: the MUI build is ~3.6 MB, too big for plain wiiload on the
+  Wii's Wi-Fi. `apps/meshtasticd/send.sh <wii-ip>` goes through
+  `tools/wiiload_relay.py` (536-byte segments).

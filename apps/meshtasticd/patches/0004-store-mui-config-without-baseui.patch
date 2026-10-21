@@ -1,0 +1,13 @@
+diff --git a/src/modules/AdminModule.cpp b/src/modules/AdminModule.cpp
+index 4a65030..1ef0ae0 100644
+--- a/src/modules/AdminModule.cpp
++++ b/src/modules/AdminModule.cpp
+@@ -1918,7 +1918,7 @@ void AdminModule::saveChanges(int saveWhat, bool shouldReboot)
+ 
+ void AdminModule::handleStoreDeviceUIConfig(const meshtastic_DeviceUIConfig &uicfg)
+ {
+-#if HAS_SCREEN
++#if HAS_SCREEN || HAS_TFT // MUI-only builds (e.g. the Wii) have no BaseUI screen but still store its config
+     nodeDB->saveProto("/prefs/uiconfig.proto", meshtastic_DeviceUIConfig_size, &meshtastic_DeviceUIConfig_msg, &uicfg);
+ #endif
+ }

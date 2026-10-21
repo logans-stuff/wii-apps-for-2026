@@ -403,3 +403,10 @@ and the Wiimote IR pointer is the touchscreen.
   `nodeDB->saveToDisk()` before `exit(0)`. Otherwise nodes heard since the
   last periodic save are lost. The watchdog allows 15 s for the "saving"
   stage.
+- **MUI settings need `HAS_TFT` in the store guard.** `AdminModule::
+  handleStoreDeviceUIConfig` saves `/prefs/uiconfig.proto` only
+  `#if HAS_SCREEN`. The Wii is MUI-only (`HAS_SCREEN=0`), so every store was
+  dropped, MUI reset to defaults on each boot, and the map style was
+  forgotten. Patch 0004 widens the guard to `HAS_SCREEN || HAS_TFT`.
+- **Fewer nodes after a restart is normal**: at boot `cleanupMeshDB` purges
+  nodes that were heard but never sent a NodeInfo (no user).

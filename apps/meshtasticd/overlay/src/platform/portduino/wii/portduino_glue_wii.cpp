@@ -207,8 +207,6 @@ bool shouldWakeOnReceivedMessage()
 {
     return false;
 }
-void initApiServer(int) {}
-void deInitApiServer() {}
 
 // No serial ports on the Wii (framework LinuxSerial's FIONREAD lands here).
 extern "C" int ioctl(int, unsigned long, ...)

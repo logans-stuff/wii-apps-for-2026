@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<app version="1">
+  <name>Meshtastic</name>
+  <coder>Logan</coder>
+  <version>2.8.1</version>
+  <release_date>20261021</release_date>
+  <short_description>Meshtastic firmware 2.8.1 with MeshtasticUI</short_description>
+  <long_description>The real Meshtastic firmware (2.8.1, portduino) running natively on the Wii with a USB Meshtoad (SX1262 over CH341). MeshtasticUI on the TV: point and press A to tap, + = Enter, B = home, Home quits. Offline maps from sd:/apps/meshtasticd/maps. Phone apps connect over Wi-Fi on TCP port 4403 (tcp_api=0 in config.txt turns it off). Settings in config.txt.</long_description>
+  <no_ios_reload/>
+</app>

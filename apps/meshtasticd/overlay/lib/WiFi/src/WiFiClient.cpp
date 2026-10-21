@@ -226,17 +226,17 @@ uint8_t WiFiClient::status() {
 WiFiClient::operator bool() { return connected(); }
 
 IPAddress WiFiClient::remoteIP() const {
-    return getAddr(psock, &getpeername);
+    return getAddr(psock, &wii_getpeername);
 }
 
 uint16_t WiFiClient::remotePort() const {
-    return getPort(psock, &getpeername);
+    return getPort(psock, &wii_getpeername);
 }
 
 IPAddress WiFiClient::localIP() const {
-    return getAddr(psock, &getsockname);
+    return getAddr(psock, &wii_getsockname);
 }
 
 uint16_t WiFiClient::localPort() const {
-    return getPort(psock, &getsockname);
+    return getPort(psock, &wii_getsockname);
 }

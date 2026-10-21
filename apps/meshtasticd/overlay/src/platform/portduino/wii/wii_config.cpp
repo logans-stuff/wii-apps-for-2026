@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <strings.h>
 #include <string>
 #include <vector>
 
@@ -249,6 +250,8 @@ extern "C" void wii_config_load()
         } else if (k == "psk" || k == "key") {
             primary.settings.psk.size = (pb_size_t)b64decode(v, primary.settings.psk.bytes, sizeof(primary.settings.psk.bytes));
             dChannel = true;
+        } else if (k == "tcp_api") {
+            // read at boot by wii_tcp_api_wanted(), not a firmware setting
         } else {
             printf("config.txt: unknown key '%s'\n", k.c_str());
         }
@@ -330,6 +333,29 @@ extern "C" void wii_config_load()
     queue_admin(a);
 
     printf("config.txt: applying %u settings messages\n", (unsigned)g_pending.size());
+}
+
+// tcp_api=0 in config.txt keeps Wi-Fi off and the phone API (TCP 4403) closed;
+// it is on by default. Called from setup(), before the firmware starts the
+// API server, and brings the network up when wanted.
+extern "C" int wii_net_up(void);
+extern "C" int wii_tcp_api_wanted(void)
+{
+    bool want = true;
+    if (FILE *f = fopen(WII_CONFIG_FILE, "r")) {
+        char line[256];
+        while (fgets(line, sizeof(line), f)) {
+            char key[32], val[32];
+            if (sscanf(line, " %31[^= \t] = %31s", key, val) == 2 && strcasecmp(key, "tcp_api") == 0)
+                want = on(val);
+        }
+        fclose(f);
+    }
+    if (!want) {
+        printf("TCP API off (config.txt tcp_api)\n");
+        return 0;
+    }
+    return wii_net_up();
 }
 
 // One queued admin message per loop tick. (Nothing drains the client queue

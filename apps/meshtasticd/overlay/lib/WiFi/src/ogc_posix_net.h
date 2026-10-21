@@ -28,8 +28,26 @@ static inline int wii_listen(int s, int n) { return wii_ret(net_listen(s - 1, n)
 static inline int wii_accept(int s, struct sockaddr *a, socklen_t *l) { return wii_fd(net_accept(s - 1, a, l)); }
 static inline int wii_connect(int s, struct sockaddr *a, socklen_t l) { return wii_ret(net_connect(s - 1, a, l)); }
 static inline int wii_setsockopt(int s, int lv, int o, const void *v, socklen_t l) { return wii_ret(net_setsockopt(s - 1, lv, o, v, l)); }
-static inline int wii_fcntl(int s, int cmd, int flags) { return wii_ret(net_fcntl(s - 1, cmd, flags)); }
+// IOS has its own non-blocking bit (libogc's IOS_O_NONBLOCK, 0x04): newlib's
+// O_NONBLOCK passed through unchanged is ignored and accept()/recv() block.
+#define WII_IOS_O_NONBLOCK 0x04
+static inline int wii_fcntl(int s, int cmd, int flags)
+{
+    if (cmd == F_SETFL)
+        flags = (flags & O_NONBLOCK) ? WII_IOS_O_NONBLOCK : 0;
+    int r = wii_ret(net_fcntl(s - 1, cmd, (u32)flags));
+    if (cmd == F_GETFL && r >= 0)
+        r = (r & WII_IOS_O_NONBLOCK) ? O_NONBLOCK : 0;
+    return r;
+}
 static inline int wii_close(int s) { return wii_ret(net_close(s - 1)); }
 static inline long wii_write(int s, const void *b, size_t n) { return wii_ret(net_send(s - 1, b, (s32)n, 0)); }
 static inline long wii_read(int s, void *b, size_t n) { return wii_ret(net_recv(s - 1, b, (s32)n, 0)); }
 static inline struct hostent *wii_gethostbyname(const char *h) { return net_gethostbyname(h); }
+// libogc has no getpeername: the peer address is only logged, so report none.
+static inline int wii_getpeername(int, struct sockaddr *, socklen_t *)
+{
+    errno = ENOTSUP;
+    return -1;
+}
+static inline int wii_getsockname(int s, struct sockaddr *a, socklen_t *l) { return wii_ret(net_getsockname(s - 1, a, l)); }

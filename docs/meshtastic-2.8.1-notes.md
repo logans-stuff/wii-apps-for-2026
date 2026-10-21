@@ -410,3 +410,25 @@ and the Wiimote IR pointer is the touchscreen.
   forgotten. Patch 0004 widens the guard to `HAS_SCREEN || HAS_TFT`.
 - **Fewer nodes after a restart is normal**: at boot `cleanupMeshDB` purges
   nodes that were heard but never sent a NodeInfo (no user).
+
+## TCP API and SD install
+
+- **The phone API on TCP 4403 runs on the Wii.** It is the firmware's own
+  `WiFiServerAPI` on the portduino WiFi library, with sockets from
+  `overlay/lib/WiFi/src/ogc_posix_net.h`. Patch 0005 re-enables
+  `ServerAPI` for the Wii, since the wasm build drops it, and asks
+  `wii_tcp_api_wanted()` before starting it. `tcp_api=0` in config.txt keeps
+  Wi-Fi off. Verified with `meshtastic --host <wii> --info` (CLI 2.7.11).
+- **IOS sockets have their own non-blocking bit** (`IOS_O_NONBLOCK` = 0x04).
+  newlib's `O_NONBLOCK` passed to `net_fcntl` is ignored, so `accept()`
+  blocks and the single-threaded node freezes. The shim translates the flag
+  both ways. libogc has no `getpeername` (stubbed; it is only logged), and
+  `getsockname` must go through `net_getsockname` with the shim's fd offset.
+- **Wi-Fi in one place**: `wii_net.cpp` brings the network up once, for the
+  API and the debug log, and `wii_debuglog_stop()` (called on every exit)
+  shuts it down so HBC can reconnect.
+- **SD install**: `apps/meshtasticd/install.sh <wii-ip>` builds the release
+  firmware (no debug log stream, checked), stages
+  `dist/apps/meshtasticd/{boot.dol,meta.xml,icon.png}`, and sends
+  `tools/meshtasticd-installer` (the Meshtoad installer, with the app name
+  as a parameter). It never touches config.txt, prefs/ or maps/.

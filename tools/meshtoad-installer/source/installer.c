@@ -1,5 +1,6 @@
-/* One-shot installer: writes the Meshtoad app and offline map tiles to
- * sd:/apps/meshtoad/. Send it once with wiiload; it does the rest. */
+/* One-shot installer: writes an HBC app (and, for Meshtoad, offline map
+ * tiles) to sd:/apps/<INSTALL_APP>/. Send it once with wiiload; it does the
+ * rest. Also built for meshtasticd by tools/meshtasticd-installer. */
 #include <stdio.h>
 #include <string.h>
 
@@ -8,7 +9,14 @@
 #include <sys/stat.h>
 #include <wiiuse/wpad.h>
 
-#include "install_data.h"
+#ifndef INSTALL_APP
+#define INSTALL_APP "meshtoad"
+#define INSTALL_TITLE "Meshtoad"
+#endif
+#ifndef INSTALL_DATA
+#define INSTALL_DATA "install_data.h"
+#endif
+#include INSTALL_DATA
 
 static void *xfb;
 
@@ -32,7 +40,7 @@ int main(void)
 
     video_start();
     WPAD_Init();
-    printf("\x1b[2;1HMeshtoad installer\n");
+    printf("\x1b[2;1H" INSTALL_TITLE " installer\n");
     printf("%u files, %u KiB payload\n\n",
            (unsigned)INSTALL_NFILES, (unsigned)(INSTALL_TOTAL_BYTES / 1024));
 
@@ -45,7 +53,7 @@ int main(void)
         char *slash, *p;
         FILE *f;
         size_t n = 0;
-        snprintf(path, sizeof(path), "sd:/apps/meshtoad/%s", INSTALL_FILES[i].name);
+        snprintf(path, sizeof(path), "sd:/apps/" INSTALL_APP "/%s", INSTALL_FILES[i].name);
         /* Create every parent directory of this file (e.g. tiles/13/1490). */
         snprintf(dir, sizeof(dir), "%s", path);
         slash = strrchr(dir, '/');
@@ -69,7 +77,7 @@ int main(void)
         }
     }
 
-    printf("\n\n%s. %d files written to sd:/apps/meshtoad/.\n",
+    printf("\n\n%s. %d files written to sd:/apps/" INSTALL_APP "/.\n",
            ok == INSTALL_NFILES ? "Done" : "Some files failed", ok);
 wait:
     printf("\nPush Home to exit.\n");

@@ -1,0 +1,36 @@
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -362,6 +362,10 @@
+     LOG_INFO("S:B:%d,%s,%s,%s", HW_VENDOR, optstr(APP_VERSION), optstr(APP_ENV), optstr(APP_REPO));
+ }
+ #ifndef PIO_UNIT_TESTING
++#ifdef ARCH_PORTDUINO_WII
++extern "C" int wii_tcp_api_wanted(void); // config.txt tcp_api; brings Wi-Fi up
++#endif
++
+ void setup()
+ {
+ 
+@@ -1224,7 +1228,10 @@
+         std::atexit([] { delete piwebServerThread; });
+     }
+ #endif
+-    initApiServer(TCPPort);
++#ifdef ARCH_PORTDUINO_WII
++    if (wii_tcp_api_wanted())
++#endif
++        initApiServer(TCPPort);
+ #endif
+ 
+     // Start airtime logger thread.
+--- a/src/mesh/InterfacesTemplates.cpp
++++ b/src/mesh/InterfacesTemplates.cpp
+@@ -8,7 +8,7 @@
+ #include "SX126xInterface.h"
+ #include "SX128xInterface.cpp"
+ #include "SX128xInterface.h"
+-#ifndef ARCH_PORTDUINO_WASM // TCP socket API server excluded in the browser/wasm build
++#if !defined(ARCH_PORTDUINO_WASM) || defined(ARCH_PORTDUINO_WII) // TCP API excluded in the browser/wasm build
+ #include "api/ServerAPI.cpp"
+ #include "api/ServerAPI.h"
+ #endif

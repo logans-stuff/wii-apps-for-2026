@@ -1,8 +1,8 @@
 // Optional bring-up aid: copy everything written to stdout (the firmware log)
 // to a TCP listener on the build host, keeping the on-screen console too.
 // Compiled in only when the build defines WII_DEBUG_HOST (build.sh:
-// WII_DEBUG_HOST=10.0.0.125 apps/meshtasticd/build.sh). Uses Wi-Fi, so it
-// shuts the network down again on exit or HBC can't reconnect.
+// WII_DEBUG_HOST=10.0.0.125 apps/meshtasticd/build.sh). Wi-Fi comes from
+// wii_net.cpp; wii_debuglog_stop() (run on every exit) shuts it down.
 #ifdef WII_DEBUG_HOST
 #include <cerrno>
 #include <cstdio>
@@ -14,6 +14,9 @@
 #include <network.h>
 
 #define WII_DEBUG_PORT 4302
+
+extern "C" int wii_net_up(void);
+extern "C" void wii_net_down(void);
 
 static s32 g_sock = -1;
 static ssize_t (*g_console_write)(struct _reent *, void *, const char *, size_t);
@@ -31,17 +34,8 @@ static ssize_t tee_write(struct _reent *r, void *fd, const char *ptr, size_t len
 extern "C" void wii_debuglog_start()
 {
     struct sockaddr_in sa;
-    s32 ret = -1;
-    for (int tries = 0; tries < 10; tries++) {
-        ret = net_init();
-        if (ret != -EAGAIN)
-            break;
-        usleep(500 * 1000);
-    }
-    if (ret != 0) {
-        printf("debuglog: net_init failed (%d)\n", (int)ret);
+    if (!wii_net_up())
         return;
-    }
     g_sock = net_socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
     memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;
@@ -83,10 +77,11 @@ extern "C" void wii_debuglog_stop()
     if (g_sock >= 0)
         net_close(g_sock);
     g_sock = -1;
-    net_deinit();
+    wii_net_down();
 }
 #else
 extern "C" int wii_debuglog_detach_console(void) { return 0; }
 extern "C" void wii_debuglog_start() {}
-extern "C" void wii_debuglog_stop() {}
+extern "C" void wii_net_down(void);
+extern "C" void wii_debuglog_stop() { wii_net_down(); }
 #endif

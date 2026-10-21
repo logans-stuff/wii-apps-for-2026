@@ -63,6 +63,15 @@ extern "C" void wii_debuglog_start()
     printf("debuglog: streaming to %s:%d\n", WII_DEBUG_HOST, WII_DEBUG_PORT);
 }
 
+// MUI owns the screen now: keep streaming, stop drawing on the console.
+extern "C" int wii_debuglog_detach_console(void)
+{
+    if (g_sock < 0)
+        return 0;
+    g_console_write = nullptr;
+    return 1;
+}
+
 extern "C" void wii_debuglog_stop()
 {
     static bool stopped;
@@ -77,6 +86,7 @@ extern "C" void wii_debuglog_stop()
     net_deinit();
 }
 #else
+extern "C" int wii_debuglog_detach_console(void) { return 0; }
 extern "C" void wii_debuglog_start() {}
 extern "C" void wii_debuglog_stop() {}
 #endif

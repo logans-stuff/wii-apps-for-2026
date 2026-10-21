@@ -1,0 +1,666 @@
+diff --git a/extra_script.py b/extra_script.py
+index e8269ab..8d292b8 100644
+--- a/extra_script.py
++++ b/extra_script.py
+@@ -8,14 +8,18 @@ src_filter = [
+     "+<source>"
+ ]
+ 
+-for item in env.get("CPPDEFINES", []):
++defines = env.get("CPPDEFINES", [])
++# The Wii port has no LovyanGFX panels, so no PWM backlight helper either.
++wii = "ARCH_PORTDUINO_WII" in defines
++
++for item in defines:
+     # Add generated view directory to include path dependending on VIEW_* macro
+     if isinstance(item,str) and item.startswith("VIEW_"):
+         view = f"ui_{item[5:]}".lower()  # Ex value: "ui_320x240"
+         env.Append(CPPPATH=[realpath(join("generated", view))])
+         src_filter.append(f"+<generated/{view}>")
+     # Add portduino directory to include path dependending on ARCH_PORTDUINO macro
+-    elif item == "ARCH_PORTDUINO":
++    elif item == "ARCH_PORTDUINO" and not wii:
+         env.Append(CPPPATH=[realpath("portduino")])
+         src_filter.append("+<portduino>")
+ 
+diff --git a/include/graphics/driver/DisplayDriverConfig.h b/include/graphics/driver/DisplayDriverConfig.h
+index b8c9db7..a8b8283 100644
+--- a/include/graphics/driver/DisplayDriverConfig.h
++++ b/include/graphics/driver/DisplayDriverConfig.h
+@@ -43,7 +43,8 @@ class DisplayDriverConfig
+         MAKERFABS480X480,
+         HELTECV4_TFT,
+         WIO_TRACKER_L2,
+-        NM_CYD_C5
++        NM_CYD_C5,
++        WII
+     };
+ 
+     struct panel_config_t {
+diff --git a/include/graphics/map/CURLService.h b/include/graphics/map/CURLService.h
+index 97722db..3b5f2dc 100644
+--- a/include/graphics/map/CURLService.h
++++ b/include/graphics/map/CURLService.h
+@@ -1,36 +1,36 @@
+-#pragma once
+-
+-#include "graphics/map/TileService.h"
+-#include <functional>
+-
+-#ifdef ARCH_PORTDUINO
+-
+-#include <curl/curl.h>
+-
+-#ifdef INADDR_NONE
+-// Winsock defines INADDR_NONE as a macro; ArduinoCore-API declares it as an IPAddress symbol.
+-#undef INADDR_NONE
+-#endif
+-
+-/**
+- * CURLService is a TileService implementation that uses libcurl to fetch map tiles over HTTP.
+- * It supports saving tiles to a cache via a user-provided callback.
+- */
+-class CURLService : public ITileService
+-{
+-  public:
+-    using Callback = std::function<bool(const char *name, void *img, size_t len)>;
+-
+-    CURLService(Callback cb = nullptr);
+-    bool load(const char *name, void *img) override;
+-    bool isAsync() const override { return true; }
+-    lv_image_dsc_t *loadRaw(const char *name) override;
+-    virtual ~CURLService();
+-
+-  private:
+-    Callback saveCB = nullptr;
+-    CURL *curlHandle = nullptr;
+-    uint64_t offlineUntilMs = 0;
+-};
+-
+-#endif
++#pragma once
++
++#include "graphics/map/TileService.h"
++#include <functional>
++
++#if defined(ARCH_PORTDUINO) && !defined(ARCH_PORTDUINO_WII) // no libcurl on the Wii
++
++#include <curl/curl.h>
++
++#ifdef INADDR_NONE
++// Winsock defines INADDR_NONE as a macro; ArduinoCore-API declares it as an IPAddress symbol.
++#undef INADDR_NONE
++#endif
++
++/**
++ * CURLService is a TileService implementation that uses libcurl to fetch map tiles over HTTP.
++ * It supports saving tiles to a cache via a user-provided callback.
++ */
++class CURLService : public ITileService
++{
++  public:
++    using Callback = std::function<bool(const char *name, void *img, size_t len)>;
++
++    CURLService(Callback cb = nullptr);
++    bool load(const char *name, void *img) override;
++    bool isAsync() const override { return true; }
++    lv_image_dsc_t *loadRaw(const char *name) override;
++    virtual ~CURLService();
++
++  private:
++    Callback saveCB = nullptr;
++    CURL *curlHandle = nullptr;
++    uint64_t offlineUntilMs = 0;
++};
++
++#endif
+diff --git a/include/lv_conf.h b/include/lv_conf.h
+index 0e1ca87..ec31064 100644
+--- a/include/lv_conf.h
++++ b/include/lv_conf.h
+@@ -103,6 +103,8 @@
+  * - LV_OS_CUSTOM */
+ #ifdef ARDUINO_ARCH_ESP32
+     #define LV_USE_OS   LV_OS_FREERTOS
++#elif defined(ARCH_PORTDUINO_WII)
++    #define LV_USE_OS   LV_OS_NONE /* single-threaded: the main loop drives LVGL */
+ #else
+     #define LV_USE_OS   LV_OS_PTHREAD
+ #endif
+@@ -349,8 +351,15 @@
+ #define LV_USE_ASSERT_OBJ           0   /*Check the object's type and existence (e.g. not deleted). (Slow)*/
+ 
+ /*Add a custom handler when assert happens e.g. to restart the MCU*/
++#ifdef ARCH_PORTDUINO_WII
++/* Wii: an LVGL assert exits (code 70) so the log/exit screen shows it,
++ * instead of hanging silently */
++#define LV_ASSERT_HANDLER_INCLUDE <stdlib.h>
++#define LV_ASSERT_HANDLER exit(70);
++#else
+ #define LV_ASSERT_HANDLER_INCLUDE <stdint.h>
+ #define LV_ASSERT_HANDLER while(1);   /*Halt by default*/
++#endif
+ 
+ /*-------------
+  * Debug
+@@ -443,7 +452,11 @@
+  *====================*/
+ 
+ /*For big endian systems set to 1*/
++#ifdef ARCH_PORTDUINO_WII
++#define LV_BIG_ENDIAN_SYSTEM 1 /* the Wii's PowerPC; lv_init() asserts on a mismatch */
++#else
+ #define LV_BIG_ENDIAN_SYSTEM 0
++#endif
+ 
+ /*Define a custom attribute to `lv_tick_inc` function*/
+ #define LV_ATTRIBUTE_TICK_INC
+diff --git a/library.json b/library.json
+index 4a23ce0..c0c6adb 100644
+--- a/library.json
++++ b/library.json
+@@ -22,7 +22,6 @@
+   "dependencies": {
+     "ArduinoThread": "https://github.com/meshtastic/ArduinoThread/archive/7c3ee9e1951551b949763b1f5280f8db1fa4068d.zip",
+     "lvgl/lvgl": "https://github.com/lvgl/lvgl/archive/refs/tags/v9.3.0.zip",
+-    "greiman/SdFat": "https://github.com/mverch67/SdFat/archive/152a52251fc5e1d581303b42378ea712ab229246.zip",
+     "libdeflate": "https://github.com/mverch67/libdeflate/archive/7291dd18ed11df673cce8e33b7f432a1273f1945.zip",
+     "nanopb/Nanopb": "https://github.com/nanopb/nanopb/archive/refs/tags/nanopb-0.4.9.1.zip",
+     "bitbank2/PNGdec": "https://github.com/mverch67/PNGdec/archive/d88b6fe2ec8d49c2b097a529b34d1d615ca5cf1b.zip"
+diff --git a/source/graphics/DeviceGUI.cpp b/source/graphics/DeviceGUI.cpp
+index 571c5aa..fd4a407 100644
+--- a/source/graphics/DeviceGUI.cpp
++++ b/source/graphics/DeviceGUI.cpp
+@@ -95,7 +95,7 @@ void DeviceGUI::toggleDisplay(void)
+  */
+ void DeviceGUI::task_handler(void)
+ {
+-#if defined(ARCH_PORTDUINO)
++#if defined(ARCH_PORTDUINO) && !defined(ARCH_PORTDUINO_WII) // the Wii driver sets an lv_tick callback
+     int ms = 10;
+     auto start = std::chrono::high_resolution_clock::now();
+     displaydriver->task_handler();
+diff --git a/source/graphics/TFT/TFTView_320x240.cpp b/source/graphics/TFT/TFTView_320x240.cpp
+index 82213f3..9655b53 100644
+--- a/source/graphics/TFT/TFTView_320x240.cpp
++++ b/source/graphics/TFT/TFTView_320x240.cpp
+@@ -11,6 +11,9 @@
+ #include "graphics/driver/DisplayDriverFactory.h"
+ #include "graphics/map/AsyncTileService.h"
+ #include "graphics/map/CURLService.h"
++#ifdef USE_WII_DISPLAY
++#include "graphics/driver/WiiDriver.h"
++#endif
+ #include "graphics/map/MapPanel.h"
+ #include "graphics/map/TileProvider.h"
+ #include "graphics/map/URLService.h"
+@@ -800,6 +803,10 @@ void TFTView_320x240::ui_events_init(void)
+ 
+     // main button events
+     lv_obj_add_event_cb(objects.home_button, ui_event_HomeButton, LV_EVENT_ALL, this); // uses lambda above
++#ifdef USE_WII_DISPLAY
++    // Wiimote B = back to the home screen, as if the sidebar's Home was tapped
++    WiiDriver::backHandler = [] { lv_obj_send_event(objects.home_button, LV_EVENT_CLICKED, nullptr); };
++#endif
+     lv_obj_add_event_cb(objects.nodes_button, this->ui_event_NodesButton, LV_EVENT_ALL, NULL);
+     lv_obj_add_event_cb(objects.groups_button, this->ui_event_GroupsButton, LV_EVENT_ALL, NULL);
+     lv_obj_add_event_cb(objects.messages_button, this->ui_event_MessagesButton, LV_EVENT_ALL, NULL);
+@@ -2869,8 +2876,10 @@ void TFTView_320x240::loadMap(void)
+         auto tileService = new SDCardService();
+         map = new MapPanel(objects.raw_map_panel,
+                            new PMTileService(tileService, new SDMapFileSystem())); // TODO: LinuxFileSystemService
++#ifndef ARCH_PORTDUINO_WII // Wii: tiles only from the SD card, no online fallback
+         map->setBackupService(new AsyncTileService(new CURLService(
+             [tileService](const char *name, void *img, size_t len) { return tileService->save(name, img, len); })));
++#endif
+ #else
+         map = new MapPanel(objects.raw_map_panel, new AsyncTileService(new URLService()));
+ #endif
+diff --git a/source/graphics/driver/DisplayDriverFactory.cpp b/source/graphics/driver/DisplayDriverFactory.cpp
+index a342272..0f26baf 100644
+--- a/source/graphics/driver/DisplayDriverFactory.cpp
++++ b/source/graphics/driver/DisplayDriverFactory.cpp
+@@ -1,9 +1,16 @@
+ #include "graphics/driver/DisplayDriverFactory.h"
++#ifndef ARCH_PORTDUINO_WII // no LovyanGFX/SPI panels on the Wii
+ #include "graphics/LGFX/LGFXConfig.h"
++#else
++#include "util/ILog.h"
++#endif
+ #include <assert.h>
+-#if defined(LGFX_DRIVER) || defined(ARCH_PORTDUINO)
++#if defined(LGFX_DRIVER) || (defined(ARCH_PORTDUINO) && !defined(ARCH_PORTDUINO_WII))
+ #include "graphics/driver/LGFXDriver.h"
+ #endif
++#if defined(USE_WII_DISPLAY)
++#include "graphics/driver/WiiDriver.h"
++#endif
+ #if defined(OLED_DRIVER) || defined(ARCH_PORTDUINO)
+ #include "graphics/driver/OLEDDriver.h"
+ #endif
+@@ -102,6 +109,9 @@ DisplayDriverFactory::DisplayDriverFactory() {}
+ 
+ DisplayDriver *DisplayDriverFactory::create(uint16_t width, uint16_t height)
+ {
++#if defined(USE_WII_DISPLAY)
++    return &WiiDriver::create(width, height);
++#endif
+ #if defined(USE_FRAMEBUFFER)
+     return &FBDriver::create(width, height);
+ #endif
+@@ -117,7 +127,11 @@ DisplayDriver *DisplayDriverFactory::create(uint16_t width, uint16_t height)
+ 
+ DisplayDriver *DisplayDriverFactory::create(const DisplayDriverConfig &cfg)
+ {
+-#if defined(LGFXConfig) || defined(ARCH_PORTDUINO)
++#if defined(USE_WII_DISPLAY)
++    if (cfg._device == DisplayDriverConfig::device_t::WII)
++        return &WiiDriver::create(cfg.width(), cfg.height());
++#endif
++#if defined(LGFXConfig) || (defined(ARCH_PORTDUINO) && !defined(ARCH_PORTDUINO_WII))
+     if (cfg._device == DisplayDriverConfig::device_t::CUSTOM_TFT) {
+         // for now assume LGFX driver, but could be also TFT_eSPI if implemented
+         return new LGFXDriver<LGFXConfig>(cfg);
+diff --git a/source/graphics/map/CURLService.cpp b/source/graphics/map/CURLService.cpp
+index 7cc757d..ab843ca 100644
+--- a/source/graphics/map/CURLService.cpp
++++ b/source/graphics/map/CURLService.cpp
+@@ -1,199 +1,199 @@
+-#include "graphics/map/CURLService.h"
+-#include "graphics/map/MapTileSettings.h"
+-#include "graphics/map/TileProvider.h"
+-#include "lvgl.h"
+-#include "util/ILog.h"
+-#include "util/PNGDecoder.h"
+-
+-#ifdef ARCH_PORTDUINO
+-
+-#include <chrono>
+-#include <curl/curl.h>
+-
+-namespace
+-{
+-constexpr long CURL_CONNECT_TIMEOUT_MS = 500L;
+-constexpr long CURL_REQUEST_TIMEOUT_MS = 1500L;
+-constexpr long CURL_LOW_SPEED_LIMIT_BYTES = 1L;
+-constexpr long CURL_LOW_SPEED_TIME_S = 1L;
+-constexpr uint64_t CURL_OFFLINE_BACKOFF_MS = 5000ULL;
+-
+-uint64_t monotonicMs()
+-{
+-    using namespace std::chrono;
+-    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+-}
+-
+-bool isNetworkUnavailable(CURLcode code)
+-{
+-    return code == CURLE_OPERATION_TIMEDOUT || code == CURLE_COULDNT_RESOLVE_HOST || code == CURLE_COULDNT_CONNECT ||
+-           code == CURLE_GOT_NOTHING || code == CURLE_RECV_ERROR || code == CURLE_SEND_ERROR ||
+-           code == CURLE_COULDNT_RESOLVE_PROXY;
+-}
+-} // namespace
+-
+-// libcurl write callback: appends received data into a std::vector<uint8_t>
+-struct CurlBuffer {
+-    uint8_t *data = nullptr;
+-    size_t size = 0;
+-    size_t capacity = 0;
+-};
+-
+-static size_t curlWriteCallback(void *contents, size_t memberSize, size_t nmemb, void *userp)
+-{
+-    size_t incoming = memberSize * nmemb;
+-    CurlBuffer *buf = static_cast<CurlBuffer *>(userp);
+-
+-    size_t needed = buf->size + incoming;
+-    if (needed > buf->capacity) {
+-        size_t newCapacity = needed * 2;
+-        uint8_t *newData = (uint8_t *)lv_realloc(buf->data, newCapacity);
+-        if (!newData)
+-            return 0; // signal error to libcurl
+-        buf->data = newData;
+-        buf->capacity = newCapacity;
+-    }
+-
+-    memcpy(buf->data + buf->size, contents, incoming);
+-    buf->size += incoming;
+-    return incoming;
+-}
+-
+-CURLService::CURLService(Callback cb) : ITileService("HTTP:"), saveCB(cb)
+-{
+-    curl_global_init(CURL_GLOBAL_DEFAULT);
+-    curlHandle = curl_easy_init();
+-    if (!curlHandle) {
+-        ILOG_ERROR("curl_easy_init failed in CURLService ctor");
+-    }
+-    initPNGDecoder();
+-}
+-
+-CURLService::~CURLService()
+-{
+-    if (curlHandle) {
+-        curl_easy_cleanup(curlHandle);
+-        curlHandle = nullptr;
+-    }
+-    curl_global_cleanup();
+-}
+-
+-bool CURLService::load(const char *name, void *img)
+-{
+-    lv_image_dsc_t *img_dsc = loadRaw(name);
+-    if (!img_dsc)
+-        return false;
+-    lv_obj_t *img_obj = (lv_obj_t *)img;
+-    lv_image_set_src(img_obj, img_dsc);
+-    if (lv_image_get_src(img_obj) != img_dsc) {
+-        ILOG_ERROR("lv_image_set_src failed for tile %s", name);
+-        if (img_dsc->data && img_dsc->data_size > 0)
+-            lv_free((void *)img_dsc->data);
+-        lv_free(img_dsc);
+-        return false;
+-    }
+-    return true;
+-}
+-
+-lv_image_dsc_t *CURLService::loadRaw(const char *name)
+-{
+-    const uint64_t nowMs = monotonicMs();
+-    if (nowMs < offlineUntilMs) {
+-        return nullptr;
+-    }
+-
+-    std::string url = TileProvider::url(name);
+-    if (url.empty()) {
+-        return nullptr;
+-    }
+-
+-    CURL *curl = curlHandle;
+-    if (!curl) {
+-        ILOG_ERROR("curl_easy_init failed for tile %s", name ? name : "(null)");
+-        return nullptr;
+-    }
+-
+-    curl_easy_reset(curl);
+-
+-    CurlBuffer buf{};
+-    struct CurlHeaderGuard {
+-        curl_slist *list = nullptr;
+-        ~CurlHeaderGuard()
+-        {
+-            if (list) {
+-                curl_slist_free_all(list);
+-            }
+-        }
+-    } headers;
+-
+-    headers.list = curl_slist_append(headers.list, "Accept: image/png,image/*;q=0.9,*/*;q=0.8");
+-    headers.list = curl_slist_append(headers.list, "Connection: keep-alive");
+-
+-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteCallback);
+-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
+-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.list);
+-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "MUI/2.8 (+https://meshtastic.org)");
+-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, CURL_CONNECT_TIMEOUT_MS);
+-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, CURL_REQUEST_TIMEOUT_MS);
+-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, CURL_LOW_SPEED_LIMIT_BYTES);
+-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, CURL_LOW_SPEED_TIME_S);
+-    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+-    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
+-    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 0L);
+-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+-    curl_easy_setopt(curl, CURLOPT_DNS_CACHE_TIMEOUT, 300L);
+-    curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+-    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+-
+-    CURLcode res = curl_easy_perform(curl);
+-    long httpCode = 0;
+-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+-
+-    if (res != CURLE_OK) {
+-        if (isNetworkUnavailable(res) && (monotonicMs() - nowMs > CURL_CONNECT_TIMEOUT_MS)) {
+-            offlineUntilMs = monotonicMs() + CURL_OFFLINE_BACKOFF_MS;
+-            ILOG_WARN("Network error(%d), pausing HTTP tile fetches for %lu ms", (int)res,
+-                      (unsigned long)CURL_OFFLINE_BACKOFF_MS);
+-        }
+-        ILOG_ERROR("ERROR GET %s : %s (HTTP %ld)", url.c_str(), curl_easy_strerror(res), httpCode);
+-        lv_free(buf.data);
+-        return nullptr;
+-    }
+-
+-    if (httpCode < 200 || httpCode >= 300) {
+-        ILOG_ERROR("ERROR GET %s : HTTP %ld", url.c_str(), httpCode);
+-        lv_free(buf.data);
+-        return nullptr;
+-    }
+-
+-    if (buf.size == 0) {
+-        ILOG_WARN("GET %s : empty response", url.c_str());
+-        lv_free(buf.data);
+-        return nullptr;
+-    }
+-
+-    ILOG_DEBUG("SUCCESS: GET %s (%u bytes, HTTP %ld)", url.c_str(), (unsigned int)buf.size, httpCode);
+-    offlineUntilMs = 0;
+-
+-    if (saveCB && MapTileSettings::saveOK()) {
+-        bool result = saveCB(name, buf.data, buf.size);
+-        ILOG_DEBUG("save png to cache -> %s", result ? "OK" : "failed");
+-    }
+-
+-    lv_image_dsc_t *img_dsc = nullptr;
+-    bool decoded =
+-        MapTileSettings::color() ? decodeImgColor(buf.data, buf.size, &img_dsc) : decodeImgGrey(buf.data, buf.size, &img_dsc);
+-    lv_free(buf.data);
+-    buf.data = nullptr;
+-
+-    if (!decoded) {
+-        ILOG_ERROR("Failed to decode tile image %s", name);
+-        return nullptr;
+-    }
+-    return img_dsc;
+-}
+-
+-#endif
++#include "graphics/map/CURLService.h"
++#include "graphics/map/MapTileSettings.h"
++#include "graphics/map/TileProvider.h"
++#include "lvgl.h"
++#include "util/ILog.h"
++#include "util/PNGDecoder.h"
++
++#if defined(ARCH_PORTDUINO) && !defined(ARCH_PORTDUINO_WII) // no libcurl on the Wii
++
++#include <chrono>
++#include <curl/curl.h>
++
++namespace
++{
++constexpr long CURL_CONNECT_TIMEOUT_MS = 500L;
++constexpr long CURL_REQUEST_TIMEOUT_MS = 1500L;
++constexpr long CURL_LOW_SPEED_LIMIT_BYTES = 1L;
++constexpr long CURL_LOW_SPEED_TIME_S = 1L;
++constexpr uint64_t CURL_OFFLINE_BACKOFF_MS = 5000ULL;
++
++uint64_t monotonicMs()
++{
++    using namespace std::chrono;
++    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
++}
++
++bool isNetworkUnavailable(CURLcode code)
++{
++    return code == CURLE_OPERATION_TIMEDOUT || code == CURLE_COULDNT_RESOLVE_HOST || code == CURLE_COULDNT_CONNECT ||
++           code == CURLE_GOT_NOTHING || code == CURLE_RECV_ERROR || code == CURLE_SEND_ERROR ||
++           code == CURLE_COULDNT_RESOLVE_PROXY;
++}
++} // namespace
++
++// libcurl write callback: appends received data into a std::vector<uint8_t>
++struct CurlBuffer {
++    uint8_t *data = nullptr;
++    size_t size = 0;
++    size_t capacity = 0;
++};
++
++static size_t curlWriteCallback(void *contents, size_t memberSize, size_t nmemb, void *userp)
++{
++    size_t incoming = memberSize * nmemb;
++    CurlBuffer *buf = static_cast<CurlBuffer *>(userp);
++
++    size_t needed = buf->size + incoming;
++    if (needed > buf->capacity) {
++        size_t newCapacity = needed * 2;
++        uint8_t *newData = (uint8_t *)lv_realloc(buf->data, newCapacity);
++        if (!newData)
++            return 0; // signal error to libcurl
++        buf->data = newData;
++        buf->capacity = newCapacity;
++    }
++
++    memcpy(buf->data + buf->size, contents, incoming);
++    buf->size += incoming;
++    return incoming;
++}
++
++CURLService::CURLService(Callback cb) : ITileService("HTTP:"), saveCB(cb)
++{
++    curl_global_init(CURL_GLOBAL_DEFAULT);
++    curlHandle = curl_easy_init();
++    if (!curlHandle) {
++        ILOG_ERROR("curl_easy_init failed in CURLService ctor");
++    }
++    initPNGDecoder();
++}
++
++CURLService::~CURLService()
++{
++    if (curlHandle) {
++        curl_easy_cleanup(curlHandle);
++        curlHandle = nullptr;
++    }
++    curl_global_cleanup();
++}
++
++bool CURLService::load(const char *name, void *img)
++{
++    lv_image_dsc_t *img_dsc = loadRaw(name);
++    if (!img_dsc)
++        return false;
++    lv_obj_t *img_obj = (lv_obj_t *)img;
++    lv_image_set_src(img_obj, img_dsc);
++    if (lv_image_get_src(img_obj) != img_dsc) {
++        ILOG_ERROR("lv_image_set_src failed for tile %s", name);
++        if (img_dsc->data && img_dsc->data_size > 0)
++            lv_free((void *)img_dsc->data);
++        lv_free(img_dsc);
++        return false;
++    }
++    return true;
++}
++
++lv_image_dsc_t *CURLService::loadRaw(const char *name)
++{
++    const uint64_t nowMs = monotonicMs();
++    if (nowMs < offlineUntilMs) {
++        return nullptr;
++    }
++
++    std::string url = TileProvider::url(name);
++    if (url.empty()) {
++        return nullptr;
++    }
++
++    CURL *curl = curlHandle;
++    if (!curl) {
++        ILOG_ERROR("curl_easy_init failed for tile %s", name ? name : "(null)");
++        return nullptr;
++    }
++
++    curl_easy_reset(curl);
++
++    CurlBuffer buf{};
++    struct CurlHeaderGuard {
++        curl_slist *list = nullptr;
++        ~CurlHeaderGuard()
++        {
++            if (list) {
++                curl_slist_free_all(list);
++            }
++        }
++    } headers;
++
++    headers.list = curl_slist_append(headers.list, "Accept: image/png,image/*;q=0.9,*/*;q=0.8");
++    headers.list = curl_slist_append(headers.list, "Connection: keep-alive");
++
++    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
++    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlWriteCallback);
++    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
++    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers.list);
++    curl_easy_setopt(curl, CURLOPT_USERAGENT, "MUI/2.8 (+https://meshtastic.org)");
++    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
++    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, CURL_CONNECT_TIMEOUT_MS);
++    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, CURL_REQUEST_TIMEOUT_MS);
++    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, CURL_LOW_SPEED_LIMIT_BYTES);
++    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, CURL_LOW_SPEED_TIME_S);
++    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
++    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
++    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 0L);
++    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
++    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
++    curl_easy_setopt(curl, CURLOPT_DNS_CACHE_TIMEOUT, 300L);
++    curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
++    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
++
++    CURLcode res = curl_easy_perform(curl);
++    long httpCode = 0;
++    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
++
++    if (res != CURLE_OK) {
++        if (isNetworkUnavailable(res) && (monotonicMs() - nowMs > CURL_CONNECT_TIMEOUT_MS)) {
++            offlineUntilMs = monotonicMs() + CURL_OFFLINE_BACKOFF_MS;
++            ILOG_WARN("Network error(%d), pausing HTTP tile fetches for %lu ms", (int)res,
++                      (unsigned long)CURL_OFFLINE_BACKOFF_MS);
++        }
++        ILOG_ERROR("ERROR GET %s : %s (HTTP %ld)", url.c_str(), curl_easy_strerror(res), httpCode);
++        lv_free(buf.data);
++        return nullptr;
++    }
++
++    if (httpCode < 200 || httpCode >= 300) {
++        ILOG_ERROR("ERROR GET %s : HTTP %ld", url.c_str(), httpCode);
++        lv_free(buf.data);
++        return nullptr;
++    }
++
++    if (buf.size == 0) {
++        ILOG_WARN("GET %s : empty response", url.c_str());
++        lv_free(buf.data);
++        return nullptr;
++    }
++
++    ILOG_DEBUG("SUCCESS: GET %s (%u bytes, HTTP %ld)", url.c_str(), (unsigned int)buf.size, httpCode);
++    offlineUntilMs = 0;
++
++    if (saveCB && MapTileSettings::saveOK()) {
++        bool result = saveCB(name, buf.data, buf.size);
++        ILOG_DEBUG("save png to cache -> %s", result ? "OK" : "failed");
++    }
++
++    lv_image_dsc_t *img_dsc = nullptr;
++    bool decoded =
++        MapTileSettings::color() ? decodeImgColor(buf.data, buf.size, &img_dsc) : decodeImgGrey(buf.data, buf.size, &img_dsc);
++    lv_free(buf.data);
++    buf.data = nullptr;
++
++    if (!decoded) {
++        ILOG_ERROR("Failed to decode tile image %s", name);
++        return nullptr;
++    }
++    return img_dsc;
++}
++
++#endif

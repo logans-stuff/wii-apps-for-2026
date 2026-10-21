@@ -1,0 +1,55 @@
+diff --git a/src/graphics/tftSetup.cpp b/src/graphics/tftSetup.cpp
+index 8e971cb..e0f53e6 100644
+--- a/src/graphics/tftSetup.cpp
++++ b/src/graphics/tftSetup.cpp
+@@ -332,6 +332,14 @@ void tftSetup(void)
+     deviceScreen = &DeviceScreen::create(reentrantSpiLock);
+     PacketAPI::create(PacketServer::init());
+     deviceScreen->init(new PacketClient);
++#elif defined(ARCH_PORTDUINO_WII)
++    // The Wii's TV: MUI's 320x240 layout, drawn 2x by WiiDriver.
++    {
++        DisplayDriverConfig displayConfig(DisplayDriverConfig::device_t::WII, 320, 240);
++        deviceScreen = &DeviceScreen::create(&displayConfig, &reentrantSpiLock);
++        PacketAPI::create(PacketServer::init());
++        deviceScreen->init(new PacketClient);
++    }
+ #else
+     if (portduino_config.displayPanel != no_screen) {
+         DisplayDriverConfig displayConfig;
+@@ -427,10 +435,20 @@ void tftSetup(void)
+         tftSleepObserver->observe(&notifyLightSleep);
+         endSleepObserver->observe(&notifyLightSleepEnd);
+         xTaskCreatePinnedToCore(tft_task_handler, "tft", TFT_TASK_STACK_SIZE, NULL, 1, NULL, 0);
++#elif defined(ARCH_PORTDUINO_WII)
++        // single-threaded: the main loop calls wii_tft_tick() every frame
+ #elif defined(ARCH_PORTDUINO)
+         std::thread *tft_task = new std::thread([] { tft_task_handler(); });
+ #endif
+     }
+ }
+ 
++#ifdef ARCH_PORTDUINO_WII
++extern "C" void wii_tft_tick(void)
++{
++    if (deviceScreen)
++        deviceScreen->task_handler();
++}
++#endif
++
+ #endif
+\ No newline at end of file
+diff --git a/src/main.cpp b/src/main.cpp
+index d9f4818..eee9b45 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -870,6 +870,9 @@ void setup()
+     // Initialize transmit history to persist broadcast throttle timers across reboots
+     TransmitHistory::getInstance()->loadFromDisk();
+ #if HAS_TFT
++#ifdef ARCH_PORTDUINO_WII // the TV is the only screen: always run MUI
++    config.display.displaymode = meshtastic_Config_DisplayConfig_DisplayMode_COLOR;
++#endif
+     if (config.display.displaymode == meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
+         tftSetup();
+     }

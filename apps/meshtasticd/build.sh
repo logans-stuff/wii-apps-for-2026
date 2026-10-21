@@ -12,6 +12,9 @@ ROOT=$PWD
 APP=apps/meshtasticd
 FW=third_party/meshtastic-firmware
 FW_REF=v2.8.1.8e6a88d
+# MUI (device-ui) at the commit FW_REF pins in platformio.ini [device-ui_base]
+DUI=third_party/meshtastic-device-ui
+DUI_REF=f77bb709cd83449467520d14344308c63690b624
 IMAGE=meshtasticd-wii-build:2
 GIT="env GIT_CONFIG_GLOBAL=/dev/null git"
 
@@ -25,6 +28,23 @@ for p in "$APP"/patches/*.patch; do
     [ -e "$p" ] && $GIT -C "$FW" apply --whitespace=nowarn "$ROOT/$p"
 done
 cp -r "$APP"/overlay/. "$FW"/
+
+# device-ui (MUI): a pinned checkout, our patches and Wii driver on top, then
+# staged into the firmware's lib/ so it's built as a project library.
+if [ ! -d "$DUI/.git" ]; then
+    $GIT init -q "$DUI"
+    $GIT -C "$DUI" remote add origin https://github.com/meshtastic/device-ui
+    $GIT -C "$DUI" fetch -q --depth 1 origin "$DUI_REF"
+fi
+$GIT -C "$DUI" checkout -q -f "$DUI_REF"
+$GIT -C "$DUI" clean -qfd
+for p in "$APP"/patches/device-ui/*.patch; do
+    [ -e "$p" ] && $GIT -C "$DUI" apply --whitespace=nowarn "$ROOT/$p"
+done
+cp -r "$APP"/overlay-device-ui/. "$DUI"/
+rm -rf "$FW"/lib/device-ui
+mkdir -p "$FW"/lib/device-ui
+(cd "$DUI" && tar cf - --exclude=.git --exclude=studio --exclude=docs --exclude=tests --exclude=maps .) | tar xf - -C "$FW"/lib/device-ui
 
 docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" "$APP"/docker
 

@@ -9,6 +9,7 @@
 #include <fat.h>
 #include <gccore.h>
 #include <ogc/lwp.h>
+#include <sys/iosupport.h>
 #include <wiiuse/wpad.h>
 
 extern "C" void setup();
@@ -21,21 +22,45 @@ extern "C" void wii_debuglog_stop();
 extern "C" void wii_config_load();
 extern "C" void wii_config_tick();
 
+// The boot log shows on a text console until MUI's WiiDriver takes over the
+// same framebuffer (wii_console_detach).
+extern "C" void *wii_xfb = nullptr;
+extern "C" GXRModeObj *wii_rmode = nullptr;
+extern "C" volatile int wii_ui_active = 0;
+extern "C" int wii_debuglog_detach_console(void);
+extern "C" void wii_tft_tick(void);
+
 static void console_start()
 {
-    static void *xfb;
-    GXRModeObj *mode;
     VIDEO_Init();
-    mode = VIDEO_GetPreferredMode(NULL);
-    xfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(mode));
-    console_init(xfb, 20, 20, mode->fbWidth, mode->xfbHeight, mode->fbWidth * VI_DISPLAY_PIX_SZ);
-    VIDEO_Configure(mode);
-    VIDEO_SetNextFramebuffer(xfb);
+    wii_rmode = VIDEO_GetPreferredMode(NULL);
+    wii_xfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(wii_rmode));
+    console_init(wii_xfb, 20, 20, wii_rmode->fbWidth, wii_rmode->xfbHeight, wii_rmode->fbWidth * VI_DISPLAY_PIX_SZ);
+    VIDEO_Configure(wii_rmode);
+    VIDEO_SetNextFramebuffer(wii_xfb);
     VIDEO_SetBlack(false);
     VIDEO_Flush();
     VIDEO_WaitVSync();
-    if (mode->viTVMode & VI_NON_INTERLACE)
+    if (wii_rmode->viTVMode & VI_NON_INTERLACE)
         VIDEO_WaitVSync();
+}
+
+static ssize_t null_write(struct _reent *, void *, const char *, size_t len)
+{
+    return (ssize_t)len;
+}
+
+// Stop the text console drawing over MUI. With log streaming the log keeps
+// going to the build host; otherwise stdout goes nowhere.
+extern "C" void wii_console_detach(void)
+{
+    if (wii_debuglog_detach_console())
+        return;
+    static devoptab_t quiet;
+    quiet = *devoptab_list[STD_OUT];
+    quiet.write_r = null_write;
+    devoptab_list[STD_OUT] = &quiet;
+    devoptab_list[STD_ERR] = &quiet;
 }
 
 // Every exit() - the firmware's own on fatal errors, Home, reboot() - comes
@@ -64,14 +89,17 @@ extern "C" void __wrap_exit(int code)
 // before the thread exits for it.
 static volatile bool g_quit;
 static void reset_pressed(u32, void *) { g_quit = true; }
+extern "C" void wii_request_quit(void) { g_quit = true; }
 
 static void *quit_watch(void *)
 {
     int waited = 0;
     for (;;) {
-        WPAD_ScanPads();
-        if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME)
-            g_quit = true;
+        if (!wii_ui_active) { // once MUI runs, its driver reads the Wiimote
+            WPAD_ScanPads();
+            if (WPAD_ButtonsDown(0) & WPAD_BUTTON_HOME)
+                g_quit = true;
+        }
         if (g_quit && (waited += 100) >= 3000)
             exit(0);
         usleep(100 * 1000);
@@ -126,6 +154,7 @@ int main(int argc, char **argv)
     wii_config_load(); // sd:/apps/meshtasticd/config.txt, via AdminMessages
     while (!g_quit) {
         loop();
+        wii_tft_tick(); // MUI (device-ui / LVGL)
         wii_config_tick();
     }
     wii_debuglog_stop();
